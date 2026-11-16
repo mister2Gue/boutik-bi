@@ -2,28 +2,9 @@
 
 import { Fragment, useCallback, useEffect, useMemo, useState } from 'react';
 import { supabase } from '../lib/supabase';
+import { CATEGORIES, STOCK, calculs, dfr, fmt, groupBy, key, moisFr, n, recent, sum, today } from '../lib/outils';
 
-/* ---------- outils ---------- */
-const MOIS = ['janvier', 'février', 'mars', 'avril', 'mai', 'juin', 'juillet', 'août', 'septembre', 'octobre', 'novembre', 'décembre'];
-const n = v => Number(v) || 0;
-const fmt = v => Math.round(n(v)).toLocaleString('fr-FR').replace(/ | /g, ' ') + ' F';
-const today = () => { const d = new Date(); d.setMinutes(d.getMinutes() - d.getTimezoneOffset()); return d.toISOString().slice(0, 10); };
-const dfr = s => { if (!s) return ''; const [y, m, d] = s.split('-'); return `${+d} ${MOIS[+m - 1]} ${y}`; };
-const moisFr = ym => `${MOIS[+ym.slice(5, 7) - 1]} ${ym.slice(0, 4)}`;
-const key = s => String(s || '').trim().toLowerCase().replace(/\s+/g, ' ');
-const sum = (a, f) => a.reduce((t, x) => t + n(x[f]), 0);
-const recent = a => [...a].sort((x, y) => (y.date || '').localeCompare(x.date || '') || (y.created_at || '').localeCompare(x.created_at || '') || n(y.ordre) - n(x.ordre));
 const AVANT = "Avant l'application";
-
-function groupBy(rows, field, a, b) {
-  const g = new Map();
-  for (const r of rows) {
-    const k = key(r[field]); if (!k) continue;
-    if (!g.has(k)) g.set(k, { k, nom: String(r[field]).trim(), rows: [], d: 0, r: 0 });
-    const e = g.get(k); e.rows.push(r); e.d += n(r[a]); e.r += n(r[b]);
-  }
-  return [...g.values()].sort((x, y) => (y.d - y.r) - (x.d - x.r));
-}
 
 /* ---------- icônes ---------- */
 const P = {
@@ -37,21 +18,27 @@ const P = {
   clock: 'M12 7v5l3 2M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z',
   logout: 'M15 4h3a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2h-3M10 17l5-5-5-5M15 12H3',
   check: 'M5 12.5 10 17 19 7',
+  file: 'M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8zM14 3v5h5M9 13h6M9 17h6',
+  shield: 'M12 3 5 6v5c0 4.4 3 8.3 7 10 4-1.7 7-5.6 7-10V6z',
+  tag: 'M3 12V4a1 1 0 0 1 1-1h8l9 9-9 9zM7.5 7.5h.01',
+  eye: 'M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12Zm10 3a3 3 0 1 0 0-6 3 3 0 0 0 0 6Z',
 };
 const Ic = ({ name }) => <svg className="ic" viewBox="0 0 24 24" aria-hidden="true"><path d={P[name]} /></svg>;
 
 const VIEWS = [
   { id: 'accueil', lab: 'Tableau de bord', short: 'Accueil', ic: 'home', sub: "Vue d'ensemble de la boutique" },
   { id: 'ventes', lab: 'Ventes', short: 'Ventes', ic: 'cart', sub: 'Le total vendu chaque jour' },
-  { id: 'depenses', lab: 'Dépenses', short: 'Dépenses', ic: 'out', sub: 'Tout ce qui sort de la caisse' },
-  { id: 'revendeurs', lab: 'Revendeurs', short: 'Revendeurs', ic: 'users', sub: 'Ce que les revendeurs vous doivent et ont rendu' },
+  { id: 'depenses', lab: 'Dépenses', short: 'Dépenses', ic: 'out', sub: 'Tout ce qui sort de la caisse, rangé par catégorie' },
+  { id: 'revendeurs', lab: 'Revendeurs', short: 'Revend.', ic: 'users', sub: 'Ce que les revendeurs vous doivent et ont rendu' },
   { id: 'prets', lab: 'Prêts', short: 'Prêts', ic: 'hand', sub: 'Argent prêté et matériel donné à crédit' },
+  { id: 'rapports', lab: 'Rapports PDF', short: 'Rapports', ic: 'file', sub: 'Choisissez la période et les parties, puis téléchargez le PDF' },
+  { id: 'acces', lab: 'Accès', short: 'Accès', ic: 'shield', sub: 'Qui peut voir ou modifier les données', admin: true },
 ];
 
 /* ---------- page ---------- */
 export default function Home() {
   const [session, setSession] = useState(undefined);
-  const [autorise, setAutorise] = useState(null);
+  const [role, setRole] = useState(undefined);
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data }) => setSession(data.session));
@@ -60,20 +47,20 @@ export default function Home() {
   }, []);
 
   useEffect(() => {
-    if (!session) { setAutorise(null); return; }
-    supabase.rpc('est_autorise').then(({ data, error }) => setAutorise(error ? false : !!data));
+    if (!session) { setRole(undefined); return; }
+    supabase.rpc('mon_role').then(({ data, error }) => setRole(error ? null : data || null));
   }, [session]);
 
-  if (session === undefined || (session && autorise === null)) return <div className="authpage"><div className="formside" style={{ gridColumn: '1 / -1' }}><p className="hint">Chargement…</p></div></div>;
+  if (session === undefined || (session && role === undefined)) return <div className="authpage"><div className="formside" style={{ gridColumn: '1 / -1' }}><p className="hint">Chargement…</p></div></div>;
   if (!session) return <Auth />;
-  if (!autorise) return (
+  if (!role) return (
     <div className="authpage"><div className="formside" style={{ gridColumn: '1 / -1' }}><div className="authbox">
       <h2>Accès pas encore autorisé</h2>
       <p className="hint">Vous êtes connecté avec <b>{session.user.email}</b>, mais cette adresse n'est pas dans la liste des personnes autorisées. Demandez au propriétaire de l'ajouter, puis rechargez la page.</p>
       <button className="btn" onClick={() => supabase.auth.signOut()}>Se déconnecter</button>
     </div></div></div>
   );
-  return <App session={session} />;
+  return <App session={session} admin={role === 'admin'} />;
 }
 
 /* ---------- connexion ---------- */
@@ -86,11 +73,12 @@ function Auth() {
 
   async function submit(e) {
     e.preventDefault(); setBusy(true); setMsg({ t: '', c: '' });
-    const fn = mode === 'login' ? supabase.auth.signInWithPassword : supabase.auth.signUp;
-    const { data, error } = await fn.call(supabase.auth, { email, password: pw });
+    const res = mode === 'login'
+      ? await supabase.auth.signInWithPassword({ email, password: pw })
+      : await supabase.auth.signUp({ email, password: pw, options: { emailRedirectTo: location.origin } });
     setBusy(false);
-    if (error) setMsg({ c: 'err', t: mode === 'login' ? 'Email ou mot de passe incorrect.' : "Le compte n'a pas pu être créé : " + error.message });
-    else if (mode === 'signup' && !data.session) setMsg({ c: 'ok', t: 'Compte créé. Ouvrez le mail de confirmation, puis revenez vous connecter.' });
+    if (res.error) setMsg({ c: 'err', t: mode === 'login' ? 'Email ou mot de passe incorrect.' : "Le compte n'a pas pu être créé : " + res.error.message });
+    else if (mode === 'signup' && !res.data.session) setMsg({ c: 'ok', t: 'Compte créé. Ouvrez le mail de confirmation, puis revenez vous connecter.' });
   }
 
   return (
@@ -101,13 +89,13 @@ function Auth() {
         <ul>
           <li><Ic name="check" /> Vente du jour notée en quelques secondes</li>
           <li><Ic name="check" /> Revendeurs et prêts suivis personne par personne</li>
-          <li><Ic name="check" /> Solde et manquement calculés tout seuls</li>
+          <li><Ic name="check" /> Rapports PDF de la période de votre choix</li>
         </ul>
       </div>
       <div className="formside">
         <div className="authbox">
           <div><h2 style={{ fontSize: 22 }}>{mode === 'login' ? 'Se connecter' : 'Créer un compte'}</h2>
-            <p className="hint">{mode === 'login' ? 'Entrez votre email et votre mot de passe.' : 'Choisissez un mot de passe de 6 caractères minimum.'}</p></div>
+            <p className="hint">{mode === 'login' ? 'Entrez votre email et votre mot de passe.' : "Utilisez l'email que le propriétaire a autorisé. Mot de passe : 6 caractères minimum."}</p></div>
           <form onSubmit={submit}>
             <div className="field"><label htmlFor="email">Email</label><input id="email" type="email" required value={email} onChange={e => setEmail(e.target.value)} autoComplete="email" /></div>
             <div className="field"><label htmlFor="pw">Mot de passe</label><input id="pw" type="password" required minLength={6} value={pw} onChange={e => setPw(e.target.value)} autoComplete={mode === 'login' ? 'current-password' : 'new-password'} /></div>
@@ -127,7 +115,8 @@ function Auth() {
 }
 
 /* ---------- application ---------- */
-function App({ session }) {
+function App({ session, admin }) {
+  const views = VIEWS.filter(v => !v.admin || admin);
   const [view, setView] = useState('accueil');
   const [S, setS] = useState({ ventes: [], depenses: [], revendeurs: [], prets: [], caisse: null });
   const [loaded, setLoaded] = useState(false);
@@ -151,24 +140,9 @@ function App({ session }) {
   }, []);
   useEffect(() => { load(); }, [load]);
 
-  const c = useMemo(() => {
-    const ventes = sum(S.ventes, 'montant'), depenses = sum(S.depenses, 'montant');
-    const revDette = sum(S.revendeurs, 'dette'), revRemb = sum(S.revendeurs, 'rembourse');
-    const arg = S.prets.filter(p => p.type !== 'MATERIEL'), mat = S.prets.filter(p => p.type === 'MATERIEL');
-    const argPret = sum(arg, 'pret'), argRemb = sum(arg, 'rembourse'), matPret = sum(mat, 'pret'), matRemb = sum(mat, 'rembourse');
-    const ym = today().slice(0, 7);
-    const vMois = S.ventes.filter(v => v.date?.startsWith(ym)), dMois = S.depenses.filter(d => d.date?.startsWith(ym));
-    return {
-      ventes, depenses, revDette, revRemb, revReste: revDette - revRemb,
-      argPret, argRemb, argReste: argPret - argRemb, matPret, matRemb, matReste: matPret - matRemb,
-      solde: ventes + revRemb - depenses - argPret + argRemb + matRemb,
-      ym, ventesMois: sum(vMois, 'montant'), joursMois: vMois.length, depMois: sum(dMois, 'montant'),
-      moyenne: S.ventes.length ? ventes / S.ventes.length : 0,
-    };
-  }, [S]);
-
-  const V = VIEWS.find(v => v.id === view);
-  const ctx = { S, c, load };
+  const c = useMemo(() => calculs(S), [S]);
+  const V = views.find(v => v.id === view) || views[0];
+  const ctx = { S, c, load, admin, session };
   const logout = <button className="logout" onClick={() => supabase.auth.signOut()}><Ic name="logout" /> Se déconnecter</button>;
 
   return (
@@ -176,30 +150,35 @@ function App({ session }) {
       <aside className="side">
         <div className="brand"><div className="logo">Bb</div><div><b>Boutik bi</b><span>Gestion de la boutique</span></div></div>
         <nav className="menu" aria-label="Menu">
-          {VIEWS.map(v => <a key={v.id} href={'#' + v.id} className={view === v.id ? 'on' : ''}><Ic name={v.ic} />{v.lab}</a>)}
+          {views.map(v => <a key={v.id} href={'#' + v.id} className={V.id === v.id ? 'on' : ''}><Ic name={v.ic} />{v.lab}</a>)}
         </nav>
-        <div className="foot"><span className="who">{session.user.email}</span>{logout}</div>
+        <div className="foot"><span className="who">{session.user.email}</span><span className="rolepill">{admin ? 'Administrateur' : 'Lecture seule'}</span>{logout}</div>
       </aside>
 
       <div className="content">
         <div className="mtop"><div className="brand"><div className="logo">Bb</div><div><b>Boutik bi</b></div></div>{logout}</div>
         <header className="pagehead">
           <div><h1>{V.lab}</h1><p>{V.sub}</p></div>
-          {loaded && <div className="soldechip">Solde <b className="num">{fmt(c.solde)}</b></div>}
+          <div className="headright">
+            {!admin && <span className="pill view"><Ic name="eye" /> Lecture seule</span>}
+            {loaded && <div className="soldechip">Solde <b className="num">{fmt(c.solde)}</b></div>}
+          </div>
         </header>
         <main className="page">
           {!loaded && !err && <div className="banner">Chargement des données…</div>}
           {err && <div className="banner err">{err}</div>}
-          {loaded && view === 'accueil' && <Accueil {...ctx} />}
-          {loaded && view === 'ventes' && <Ventes {...ctx} />}
-          {loaded && view === 'depenses' && <Depenses {...ctx} />}
-          {loaded && view === 'revendeurs' && <Revendeurs {...ctx} />}
-          {loaded && view === 'prets' && <Prets {...ctx} />}
+          {loaded && V.id === 'accueil' && <Accueil {...ctx} />}
+          {loaded && V.id === 'ventes' && <Ventes {...ctx} />}
+          {loaded && V.id === 'depenses' && <Depenses {...ctx} />}
+          {loaded && V.id === 'revendeurs' && <Revendeurs {...ctx} />}
+          {loaded && V.id === 'prets' && <Prets {...ctx} />}
+          {loaded && V.id === 'rapports' && <Rapports {...ctx} />}
+          {loaded && V.id === 'acces' && admin && <Acces {...ctx} />}
         </main>
       </div>
 
-      <nav className="bottomnav" aria-label="Menu">
-        {VIEWS.map(v => <a key={v.id} href={'#' + v.id} className={view === v.id ? 'on' : ''}><Ic name={v.ic} />{v.short}</a>)}
+      <nav className="bottomnav" aria-label="Menu" style={{ gridTemplateColumns: `repeat(${views.length}, 1fr)` }}>
+        {views.map(v => <a key={v.id} href={'#' + v.id} className={V.id === v.id ? 'on' : ''}><Ic name={v.ic} />{v.short}</a>)}
       </nav>
     </div>
   );
@@ -226,7 +205,7 @@ function useSave() {
   return [msg, run];
 }
 
-function DelBtn({ table, id, load }) {
+function DelBtn({ table, id, load, match = 'id' }) {
   const [arm, setArm] = useState(false);
   const [busy, setBusy] = useState(false);
   useEffect(() => { if (!arm) return; const t = setTimeout(() => setArm(false), 4000); return () => clearTimeout(t); }, [arm]);
@@ -234,7 +213,7 @@ function DelBtn({ table, id, load }) {
     <button className={'lnk' + (arm ? ' arm' : '')} disabled={busy} onClick={async e => {
       e.stopPropagation();
       if (!arm) return setArm(true);
-      setBusy(true); const { error } = await supabase.from(table).delete().eq('id', id); setBusy(false);
+      setBusy(true); const { error } = await supabase.from(table).delete().eq(match, id); setBusy(false);
       if (!error) load([table]); else setArm(false);
     }}>{arm ? 'Confirmer ?' : 'Supprimer'}</button>
   );
@@ -249,7 +228,7 @@ const Seg = ({ value, onChange, options, label }) => (
 const Bar = ({ d, r }) => <div className="bar"><i style={{ width: (d > 0 ? Math.min(100, Math.max(0, r / d * 100)) : 100) + '%' }} /></div>;
 
 /* ---------- tableau de bord ---------- */
-function Accueil({ S, c, load }) {
+function Accueil({ S, c, load, admin }) {
   const [val, setVal] = useState(S.caisse?.en_main ?? '');
   const [msg, run] = useSave();
   const enMain = S.caisse?.en_main ?? null;
@@ -262,7 +241,7 @@ function Accueil({ S, c, load }) {
       <div className="kpis">
         <Kpi cls="primary" ic="wallet" lab="Solde" val={c.solde} sub="Argent qui devrait être en caisse" />
         <Kpi cls="good" ic="trend" lab={'Ventes ' + moisFr(c.ym)} val={c.ventesMois} sub={`${c.joursMois} jour${c.joursMois > 1 ? 's' : ''} noté${c.joursMois > 1 ? 's' : ''} · moyenne ${fmt(c.moyenne)}/jour`} />
-        <Kpi cls="bad" ic="out" lab="Dépenses" val={c.depenses} sub={`Dont ${fmt(c.depMois)} en ${moisFr(c.ym)}`} />
+        <Kpi cls="bad" ic="out" lab="Dépenses" val={c.depenses} sub={`Dont ${fmt(c.stock)} d'achat de stock`} />
         <Kpi cls="warn" ic="clock" lab="À récupérer" val={aRecup} sub="Revendeurs + prêts" />
       </div>
 
@@ -270,20 +249,22 @@ function Accueil({ S, c, load }) {
         <Chart ventes={S.ventes} />
         <div className="card">
           <div className="card-head"><h2>Contrôle de caisse</h2></div>
-          <form className="row" onSubmit={async e => {
-            e.preventDefault();
-            const v = val === '' ? null : Math.round(Number(val));
-            if (await run(() => supabase.from('caisse').upsert({ id: 1, en_main: v, maj_le: today() }), 'Enregistré.')) load(['caisse']);
-          }}>
-            <div className="field wide"><label htmlFor="c-main">Argent que j'ai en main (F)</label>
-              <input id="c-main" type="number" inputMode="numeric" min="0" step="1" placeholder="ex : 200000" value={val} onChange={e => setVal(e.target.value)} /></div>
-            <button className="btn" type="submit">Enregistrer</button>
-          </form>
-          <p className={'msg ' + msg.c}>{msg.t}</p>
+          {admin && <>
+            <form className="row" onSubmit={async e => {
+              e.preventDefault();
+              const v = val === '' ? null : Math.round(Number(val));
+              if (await run(() => supabase.from('caisse').upsert({ id: 1, en_main: v, maj_le: today() }), 'Enregistré.')) load(['caisse']);
+            }}>
+              <div className="field wide"><label htmlFor="c-main">Argent que j'ai en main (F)</label>
+                <input id="c-main" type="number" inputMode="numeric" min="0" step="1" placeholder="ex : 200000" value={val} onChange={e => setVal(e.target.value)} /></div>
+              <button className="btn" type="submit">Enregistrer</button>
+            </form>
+            <p className={'msg ' + msg.c}>{msg.t}</p>
+          </>}
           <div className={'res ' + (m == null ? 'none' : m > 0 ? 'bad' : 'good')}>
             <span>{m == null ? 'Manquement' : m > 0 ? 'Il manque' : m < 0 ? 'Vous avez en plus' : 'Rien ne manque'}</span>
             <b className="num">{m == null ? '—' : fmt(Math.abs(m))}</b>
-            <span className="hint">{m == null ? "Tapez l'argent que vous avez pour le calculer." : `Solde ${fmt(c.solde)} − en main ${fmt(enMain)}${S.caisse?.maj_le ? ' · noté le ' + dfr(S.caisse.maj_le) : ''}`}</span>
+            <span className="hint">{m == null ? "L'argent en main n'a pas encore été noté." : `Solde ${fmt(c.solde)} − en main ${fmt(enMain)}${S.caisse?.maj_le ? ' · noté le ' + dfr(S.caisse.maj_le) : ''}`}</span>
           </div>
           <p className="formula">Solde = ventes + remboursements des revendeurs − dépenses − argent prêté + remboursements des prêts. Manquement = solde − argent en main.</p>
         </div>
@@ -353,7 +334,7 @@ function Chart({ ventes }) {
 }
 
 /* ---------- ventes ---------- */
-function Ventes({ S, c, load }) {
+function Ventes({ S, c, load, admin }) {
   const [date, setDate] = useState(today());
   const [mt, setMt] = useState('');
   const [msg, run] = useSave();
@@ -370,7 +351,7 @@ function Ventes({ S, c, load }) {
         <Kpi ic="clock" lab="Moyenne par jour" val={c.moyenne} />
         <Kpi ic="trend" lab="Meilleur jour" val={best ? best.montant : 0} sub={best ? dfr(best.date) : ''} />
       </div>
-      <div className="card">
+      {admin && <div className="card">
         <div className="card-head"><h2>Noter la vente du jour</h2><span className="hint">Si la date existe déjà, le montant est remplacé.</span></div>
         <form className="row" onSubmit={async e => {
           e.preventDefault(); const m = Math.round(Number(mt)); if (!date || mt === '' || !(m >= 0)) return;
@@ -383,25 +364,25 @@ function Ventes({ S, c, load }) {
           <button className="btn" type="submit">Enregistrer</button>
         </form>
         <p className={'msg ' + msg.c}>{msg.t}</p>
-      </div>
+      </div>}
       <div className="card">
         <div className="card-head"><h2>Historique des ventes</h2><b className="num">{fmt(c.ventes)}</b></div>
         <div className="tablewrap">
           <table className="t">
-            <thead><tr><th>Date</th><th className="r">Montant</th><th className="r">Actions</th></tr></thead>
+            <thead><tr><th>Date</th><th className="r">Montant</th>{admin && <th className="r">Actions</th>}</tr></thead>
             <tbody>
               {months.length === 0 && <tr><td colSpan={3} className="muted">Aucune vente notée.</td></tr>}
               {months.map(g => (
                 <Fragment key={g.m}>
-                  <tr className="group"><td style={{ textTransform: 'capitalize' }}>{moisFr(g.m)} · {g.rows.length} jours</td><td className="r num">{fmt(g.tot)}</td><td /></tr>
+                  <tr className="group"><td style={{ textTransform: 'capitalize' }}>{moisFr(g.m)} · {g.rows.length} jours</td><td className="r num">{fmt(g.tot)}</td>{admin && <td />}</tr>
                   {g.rows.map(v => (
                     <tr key={v.id}>
                       <td>{dfr(v.date)}</td>
                       <td className="r num">{fmt(v.montant)}</td>
-                      <td><div className="actions">
+                      {admin && <td><div className="actions">
                         <button className="lnk" onClick={() => { setDate(v.date); setMt(String(n(v.montant))); scrollTo({ top: 0, behavior: 'smooth' }); }}>Modifier</button>
                         <DelBtn table="ventes" id={v.id} load={load} />
-                      </div></td>
+                      </div></td>}
                     </tr>
                   ))}
                 </Fragment>
@@ -415,53 +396,88 @@ function Ventes({ S, c, load }) {
 }
 
 /* ---------- dépenses ---------- */
-function Depenses({ S, c, load }) {
+function CatSelect({ d, load }) {
+  const [busy, setBusy] = useState(false);
+  return (
+    <select className="catsel" aria-label="Catégorie" value={d.categorie || 'Autre'} disabled={busy} onChange={async e => {
+      setBusy(true); const { error } = await supabase.from('depenses').update({ categorie: e.target.value }).eq('id', d.id); setBusy(false);
+      if (!error) load(['depenses']);
+    }}>
+      {CATEGORIES.map(x => <option key={x} value={x}>{x}</option>)}
+    </select>
+  );
+}
+
+function Depenses({ S, c, load, admin }) {
   const [desc, setDesc] = useState('');
   const [mt, setMt] = useState('');
   const [date, setDate] = useState(today());
+  const [cat, setCat] = useState('Autre');
   const [q, setQ] = useState('');
+  const [fCat, setFCat] = useState('');
   const [msg, run] = useSave();
   const sugg = [...new Set(S.depenses.map(d => String(d.description || '').trim()).filter(Boolean))];
-  const rows = recent(S.depenses).filter(d => !q || key(d.description).includes(key(q)));
-  const cats = groupBy(S.depenses, 'description', 'montant', 'x').sort((a, b) => b.d - a.d).slice(0, 2);
+  const rows = recent(S.depenses).filter(d => (!q || key(d.description).includes(key(q))) && (!fCat || (d.categorie || 'Autre') === fCat));
+  const parCat = CATEGORIES.map(x => { const l = S.depenses.filter(d => (d.categorie || 'Autre') === x); return { cat: x, nb: l.length, tot: sum(l, 'montant') }; })
+    .filter(x => x.nb).sort((a, b) => b.tot - a.tot);
+  const maxCat = Math.max(1, ...parCat.map(x => x.tot));
+  const lastCat = txt => { const k = key(txt); const d = recent(S.depenses).find(x => key(x.description) === k); return d?.categorie; };
 
   return (
     <>
       <div className="kpis">
         <Kpi cls="primary" ic="out" lab="Total dépenses" val={c.depenses} sub={`${S.depenses.length} dépenses`} />
-        <Kpi cls="bad" ic="clock" lab={moisFr(c.ym)} val={c.depMois} />
-        {cats.map(g => <Kpi key={g.k} ic="wallet" lab={g.nom} val={g.d} sub={`${g.rows.length} fois`} />)}
+        <Kpi cls="bad" ic="tag" lab="Charges (hors stock)" val={c.charges} sub="Loyer, électricité, transport…" />
+        <Kpi ic="cart" lab="Achat de stock" val={c.stock} sub="Marchandise à revendre" />
+        <Kpi cls="warn" ic="clock" lab={moisFr(c.ym)} val={c.depMois} />
       </div>
-      <div className="card">
-        <h2>Ajouter une dépense</h2>
-        <form className="row" onSubmit={async e => {
-          e.preventDefault(); const m = Math.round(Number(mt)); if (!desc.trim() || !(m > 0)) return;
-          if (await run(() => supabase.from('depenses').insert({ description: desc.trim(), montant: m, date }), 'Dépense ajoutée.')) { setDesc(''); setMt(''); load(['depenses']); }
-        }}>
-          <div className="field wide"><label htmlFor="d-desc">Description</label><input id="d-desc" list="dl-dep" required placeholder="ex : wifi, location, achat accessoires" value={desc} onChange={e => setDesc(e.target.value)} /></div>
-          <div className="field"><label htmlFor="d-mt">Montant (F)</label><input id="d-mt" type="number" inputMode="numeric" min="1" step="1" required value={mt} onChange={e => setMt(e.target.value)} /></div>
-          <div className="field"><label htmlFor="d-date">Date</label><input id="d-date" type="date" required value={date} onChange={e => setDate(e.target.value)} /></div>
-          <button className="btn" type="submit">Ajouter</button>
-        </form>
-        <datalist id="dl-dep">{sugg.map(s => <option key={s} value={s} />)}</datalist>
-        <p className={'msg ' + msg.c}>{msg.t}</p>
+      <div className="grid-main">
+        {admin ? <div className="card">
+          <h2>Ajouter une dépense</h2>
+          <form className="row" onSubmit={async e => {
+            e.preventDefault(); const m = Math.round(Number(mt)); if (!desc.trim() || !(m > 0)) return;
+            if (await run(() => supabase.from('depenses').insert({ description: desc.trim(), montant: m, date, categorie: cat }), 'Dépense ajoutée.')) { setDesc(''); setMt(''); load(['depenses']); }
+          }}>
+            <div className="field wide"><label htmlFor="d-desc">Description</label><input id="d-desc" list="dl-dep" required placeholder="ex : wifi, location, achat accessoires" value={desc}
+              onChange={e => { setDesc(e.target.value); const lc = lastCat(e.target.value); if (lc) setCat(lc); }} /></div>
+            <div className="field"><label htmlFor="d-cat">Catégorie</label>
+              <select id="d-cat" value={cat} onChange={e => setCat(e.target.value)}>{CATEGORIES.map(x => <option key={x} value={x}>{x}</option>)}</select></div>
+            <div className="field"><label htmlFor="d-mt">Montant (F)</label><input id="d-mt" type="number" inputMode="numeric" min="1" step="1" required value={mt} onChange={e => setMt(e.target.value)} /></div>
+            <div className="field"><label htmlFor="d-date">Date</label><input id="d-date" type="date" required value={date} onChange={e => setDate(e.target.value)} /></div>
+            <button className="btn" type="submit">Ajouter</button>
+          </form>
+          <datalist id="dl-dep">{sugg.map(s => <option key={s} value={s} />)}</datalist>
+          <p className={'msg ' + msg.c}>{msg.t}</p>
+        </div> : <div className="card"><h2>Dépenses</h2><p className="hint">Vous voyez les dépenses en lecture seule.</p></div>}
+        <div className="card">
+          <div className="card-head"><h2>Par catégorie</h2><span className="hint">Touchez pour filtrer</span></div>
+          <div className="cats">
+            {parCat.map(x => (
+              <button key={x.cat} type="button" className={'catrow' + (fCat === x.cat ? ' on' : '')} onClick={() => setFCat(fCat === x.cat ? '' : x.cat)}>
+                <div className="line"><span>{x.cat} <span className="muted">· {x.nb}</span></span><b className="num">{fmt(x.tot)}</b></div>
+                <div className="bar"><i style={{ width: (x.tot / maxCat * 100) + '%', background: x.cat === STOCK ? 'var(--blue-dark)' : 'var(--blue)' }} /></div>
+              </button>
+            ))}
+          </div>
+        </div>
       </div>
       <div className="card">
         <div className="card-head">
-          <h2>Liste des dépenses</h2>
-          <div className="searchbar"><input aria-label="Rechercher une dépense" placeholder="Rechercher…" value={q} onChange={e => setQ(e.target.value)} />{q && <b className="num">{fmt(sum(rows, 'montant'))}</b>}</div>
+          <h2>Liste des dépenses{fCat && <> · <span className="pill arg">{fCat}</span> <button className="linkbtn" onClick={() => setFCat('')}>tout afficher</button></>}</h2>
+          <div className="searchbar"><input aria-label="Rechercher une dépense" placeholder="Rechercher…" value={q} onChange={e => setQ(e.target.value)} />{(q || fCat) && <b className="num">{fmt(sum(rows, 'montant'))}</b>}</div>
         </div>
         <div className="tablewrap">
           <table className="t">
-            <thead><tr><th>Description</th><th>Date</th><th className="r">Montant</th><th className="r">Actions</th></tr></thead>
+            <thead><tr><th>Description</th><th>Catégorie</th><th className="hide-m">Date</th><th className="r">Montant</th>{admin && <th className="r">Actions</th>}</tr></thead>
             <tbody>
-              {rows.length === 0 && <tr><td colSpan={4} className="muted">Aucune dépense.</td></tr>}
+              {rows.length === 0 && <tr><td colSpan={5} className="muted">Aucune dépense.</td></tr>}
               {rows.map(d => (
                 <tr key={d.id}>
                   <td style={{ fontWeight: 600 }}>{d.description}</td>
-                  <td className="muted">{d.date ? dfr(d.date) : AVANT}</td>
+                  <td>{admin ? <CatSelect d={d} load={load} /> : <span className="pill arg">{d.categorie || 'Autre'}</span>}</td>
+                  <td className="muted hide-m">{d.date ? dfr(d.date) : AVANT}</td>
                   <td className="r num neg">{fmt(d.montant)}</td>
-                  <td><div className="actions"><DelBtn table="depenses" id={d.id} load={load} /></div></td>
+                  {admin && <td><div className="actions"><DelBtn table="depenses" id={d.id} load={load} /></div></td>}
                 </tr>
               ))}
             </tbody>
@@ -473,7 +489,7 @@ function Depenses({ S, c, load }) {
 }
 
 /* ---------- tableau par personne (revendeurs et prêts) ---------- */
-function PersonTable({ groups, table, amountField, withType, load, labels }) {
+function PersonTable({ groups, table, amountField, withType, load, labels, admin }) {
   const [open, setOpen] = useState(() => new Set());
   const [q, setQ] = useState('');
   const toggle = k => setOpen(s => { const x = new Set(s); x.has(k) ? x.delete(k) : x.add(k); return x; });
@@ -514,7 +530,7 @@ function PersonTable({ groups, table, amountField, withType, load, labels }) {
                         <td className="r num pos">{n(r.rembourse) ? '+ ' + fmt(r.rembourse) : ''}</td>
                         <td />
                         <td className="hide-m" />
-                        <td><div className="actions"><DelBtn table={table} id={r.id} load={load} /></div></td>
+                        <td>{admin && <div className="actions"><DelBtn table={table} id={r.id} load={load} /></div>}</td>
                       </tr>
                     );
                   })}
@@ -530,7 +546,7 @@ function PersonTable({ groups, table, amountField, withType, load, labels }) {
 }
 
 /* ---------- revendeurs ---------- */
-function Revendeurs({ S, c, load }) {
+function Revendeurs({ S, c, load, admin }) {
   const [kind, setKind] = useState('dette');
   const [nom, setNom] = useState('');
   const [mt, setMt] = useState('');
@@ -547,7 +563,7 @@ function Revendeurs({ S, c, load }) {
         <Kpi cls="good" ic="trend" lab="Déjà remboursé" val={c.revRemb} sub={c.revDette ? Math.round(c.revRemb / c.revDette * 100) + ' % du total' : ''} />
         <Kpi cls="warn" ic="wallet" lab="Plus grosse dette" val={groups[0] ? groups[0].d - groups[0].r : 0} sub={groups[0]?.nom} />
       </div>
-      <div className="card">
+      {admin && <div className="card">
         <h2>Nouvelle opération</h2>
         <form className="row" onSubmit={async e => {
           e.preventDefault(); const m = Math.round(Number(mt)); if (!nom.trim() || !(m > 0)) return;
@@ -563,15 +579,15 @@ function Revendeurs({ S, c, load }) {
         </form>
         <datalist id="dl-rev">{groups.map(g => <option key={g.k} value={g.nom} />)}</datalist>
         <p className={'msg ' + msg.c}>{msg.t}</p>
-      </div>
-      <PersonTable groups={groups} table="revendeurs" amountField="dette" load={load}
+      </div>}
+      <PersonTable groups={groups} table="revendeurs" amountField="dette" load={load} admin={admin}
         labels={{ title: 'Comptes des revendeurs', who: 'Revendeur', total: 'Total dû', entry: 'Dette' }} />
     </>
   );
 }
 
 /* ---------- prêts ---------- */
-function Prets({ S, c, load }) {
+function Prets({ S, c, load, admin }) {
   const [kind, setKind] = useState('pret');
   const [type, setType] = useState('ARGENT');
   const [nom, setNom] = useState('');
@@ -589,7 +605,7 @@ function Prets({ S, c, load }) {
         <Kpi cls="warn" ic="cart" lab="Matériel à récupérer" val={c.matReste} sub={`Donné ${fmt(c.matPret)} · payé ${fmt(c.matRemb)}`} />
         <Kpi cls="good" ic="trend" lab="Total rendu" val={c.argRemb + c.matRemb} />
       </div>
-      <div className="card">
+      {admin && <div className="card">
         <div className="card-head"><h2>Nouvelle opération</h2>
           <span className="hint">Argent prêté : enlevé du solde. Matériel à crédit : pas enlevé. Tout remboursement s'ajoute au solde.</span></div>
         <form className="row" onSubmit={async e => {
@@ -608,9 +624,160 @@ function Prets({ S, c, load }) {
         </form>
         <datalist id="dl-pret">{groups.map(g => <option key={g.k} value={g.nom} />)}</datalist>
         <p className={'msg ' + msg.c}>{msg.t}</p>
-      </div>
-      <PersonTable groups={groups} table="prets" amountField="pret" withType load={load}
+      </div>}
+      <PersonTable groups={groups} table="prets" amountField="pret" withType load={load} admin={admin}
         labels={{ title: 'Comptes des prêts', who: 'Personne', total: 'Total prêté', entry: 'Prêt' }} />
+    </>
+  );
+}
+
+/* ---------- rapports PDF ---------- */
+function periode(preset, du, au) {
+  const t = today(), [y, m] = t.split('-').map(Number);
+  const pad = x => String(x).padStart(2, '0');
+  const fin = (yy, mm) => `${yy}-${pad(mm)}-${pad(new Date(yy, mm, 0).getDate())}`;
+  if (preset === 'mois') return { du: `${y}-${pad(m)}-01`, au: t };
+  if (preset === 'moisdernier') { const yy = m === 1 ? y - 1 : y, mm = m === 1 ? 12 : m - 1; return { du: `${yy}-${pad(mm)}-01`, au: fin(yy, mm) }; }
+  if (preset === '30j') { const d = new Date(t); d.setDate(d.getDate() - 29); return { du: d.toISOString().slice(0, 10), au: t }; }
+  if (preset === 'annee') return { du: `${y}-01-01`, au: t };
+  if (preset === 'perso') return { du, au };
+  return { tout: true };
+}
+
+const PARTIES = [
+  ['resume', 'Résumé (chiffres clés et solde)'],
+  ['ventes', 'Ventes par mois'],
+  ['ventesDetail', 'avec le détail jour par jour', 'ventes'],
+  ['depenses', 'Dépenses par catégorie'],
+  ['depensesDetail', 'avec la liste de chaque dépense', 'depenses'],
+  ['revendeurs', 'Revendeurs'],
+  ['prets', 'Prêts'],
+  ['soldes', 'Inclure les personnes qui ont tout remboursé'],
+];
+
+function Rapports({ S }) {
+  const [preset, setPreset] = useState('tout');
+  const [du, setDu] = useState(today().slice(0, 8) + '01');
+  const [au, setAu] = useState(today());
+  const [parts, setParts] = useState({ resume: true, ventes: true, ventesDetail: false, depenses: true, depensesDetail: true, revendeurs: true, prets: true, soldes: false });
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState({ t: '', c: '' });
+  const p = periode(preset, du, au);
+  const nbV = p.tout ? S.ventes.length : S.ventes.filter(v => v.date >= p.du && v.date <= p.au).length;
+  const aucun = !['resume', 'ventes', 'depenses', 'revendeurs', 'prets'].some(k => parts[k]);
+
+  return (
+    <div className="grid2">
+      <div className="card">
+        <h2>1. Période</h2>
+        <div className="field"><label htmlFor="r-per">Période du rapport</label>
+          <select id="r-per" value={preset} onChange={e => setPreset(e.target.value)}>
+            <option value="tout">Toutes les données</option>
+            <option value="mois">Ce mois-ci</option>
+            <option value="moisdernier">Le mois dernier</option>
+            <option value="30j">Les 30 derniers jours</option>
+            <option value="annee">Cette année</option>
+            <option value="perso">Dates de mon choix</option>
+          </select></div>
+        {preset === 'perso' && <div className="row" style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+          <div className="field"><label htmlFor="r-du">Du</label><input id="r-du" type="date" value={du} max={au} onChange={e => setDu(e.target.value)} /></div>
+          <div className="field"><label htmlFor="r-au">Au</label><input id="r-au" type="date" value={au} min={du} onChange={e => setAu(e.target.value)} /></div>
+        </div>}
+        <p className="formula">{p.tout ? `Tout depuis le début : ${S.ventes.length} jours de vente, ${S.depenses.length} dépenses.` : `Du ${dfr(p.du)} au ${dfr(p.au)} : ${nbV} jour(s) de vente noté(s).`} Les revendeurs et les prêts sont toujours montrés tels qu'ils sont aujourd'hui.</p>
+      </div>
+      <div className="card">
+        <h2>2. Ce qu'il faut mettre dans le PDF</h2>
+        <div className="checks">
+          {PARTIES.map(([k, lab, parent]) => (
+            <label key={k} className={'check' + (parent ? ' sub' : '')}>
+              <input type="checkbox" checked={parts[k]} disabled={parent && !parts[parent]} onChange={() => setParts(x => ({ ...x, [k]: !x[k] }))} /> {lab}
+            </label>
+          ))}
+        </div>
+        <button className="btn" disabled={busy || aucun} onClick={async () => {
+          setBusy(true); setMsg({ t: '', c: '' });
+          try {
+            const { genererRapport } = await import('../lib/rapport');
+            await genererRapport(S, { ...parts, ventesDetail: parts.ventes && parts.ventesDetail, depensesDetail: parts.depenses && parts.depensesDetail, ...p, aujourdhui: today() });
+            setMsg({ t: 'Le PDF est téléchargé.', c: 'ok' });
+          } catch (e) { setMsg({ t: "Le PDF n'a pas pu être créé. Réessayez.", c: 'err' }); }
+          setBusy(false);
+        }}><Ic name="file" /> {busy ? 'Création du PDF…' : 'Télécharger le PDF'}</button>
+        {aucun && <p className="msg err">Cochez au moins une partie.</p>}
+        <p className={'msg ' + msg.c}>{msg.t}</p>
+      </div>
+    </div>
+  );
+}
+
+/* ---------- accès ---------- */
+function Acces({ session }) {
+  const [list, setList] = useState(null);
+  const [email, setEmail] = useState('');
+  const [role, setRole] = useState('lecteur');
+  const [msg, run] = useSave();
+  const moi = session.user.email.toLowerCase();
+  const charger = useCallback(async () => { const { data } = await supabase.from('acces').select('*').order('ajoute_le'); setList(data || []); }, []);
+  useEffect(() => { charger(); }, [charger]);
+  const [lien, setLien] = useState('');
+  useEffect(() => { setLien(location.host); }, []);
+
+  return (
+    <>
+      <div className="grid-main">
+        <div className="card">
+          <h2>Donner un accès</h2>
+          <form className="row" onSubmit={async e => {
+            e.preventDefault(); const em = email.trim().toLowerCase(); if (!em) return;
+            if (list?.some(a => a.email.toLowerCase() === em)) { await run(async () => ({ error: null }), 'Cette personne a déjà un accès.'); return; }
+            if (await run(() => supabase.from('acces').insert({ email: em, role }), `Accès donné à ${em}.`)) { setEmail(''); charger(); }
+          }}>
+            <div className="field wide"><label htmlFor="a-email">Email de la personne</label><input id="a-email" type="email" required placeholder="ex : comptable@gmail.com" value={email} onChange={e => setEmail(e.target.value)} /></div>
+            <div className="field"><label htmlFor="a-role">Ce qu'elle peut faire</label>
+              <select id="a-role" value={role} onChange={e => setRole(e.target.value)}>
+                <option value="lecteur">Voir seulement</option>
+                <option value="admin">Voir et modifier</option>
+              </select></div>
+            <button className="btn" type="submit">Donner l'accès</button>
+          </form>
+          <p className={'msg ' + msg.c}>{msg.t}</p>
+        </div>
+        <div className="card">
+          <h2>Ensuite, la personne…</h2>
+          <ol className="steps">
+            <li>ouvre <b>{lien}</b> ;</li>
+            <li>touche « Créer un compte » avec <b>le même email</b> ;</li>
+            <li>confirme son email, puis se connecte.</li>
+          </ol>
+          <p className="hint">« Voir seulement » : elle voit tout et peut télécharger les rapports PDF, mais ne peut rien ajouter, modifier ni supprimer.</p>
+        </div>
+      </div>
+      <div className="card">
+        <h2>Personnes qui ont accès</h2>
+        <div className="tablewrap">
+          <table className="t">
+            <thead><tr><th>Email</th><th>Droits</th><th className="hide-m">Ajouté le</th><th className="r">Actions</th></tr></thead>
+            <tbody>
+              {!list && <tr><td colSpan={4} className="muted">Chargement…</td></tr>}
+              {list?.map(a => {
+                const self = a.email.toLowerCase() === moi;
+                return (
+                  <tr key={a.email}>
+                    <td style={{ fontWeight: 600, overflowWrap: 'anywhere' }}>{a.email}{self && <span className="muted"> (vous)</span>}</td>
+                    <td>{self ? <span className="pill arg">Voir et modifier</span> :
+                      <select className="catsel" aria-label="Droits" value={a.role} onChange={async e => { await supabase.from('acces').update({ role: e.target.value }).eq('email', a.email); charger(); }}>
+                        <option value="lecteur">Voir seulement</option>
+                        <option value="admin">Voir et modifier</option>
+                      </select>}</td>
+                    <td className="muted hide-m">{a.ajoute_le ? dfr(a.ajoute_le.slice(0, 10)) : ''}</td>
+                    <td><div className="actions">{!self && <DelBtn table="acces" id={a.email} match="email" load={charger} />}</div></td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      </div>
     </>
   );
 }

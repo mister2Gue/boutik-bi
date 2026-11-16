@@ -73,7 +73,7 @@ main.page { padding: 22px 28px 40px; display: grid; gap: 18px; max-width: 1180px
 .hint { color: var(--muted); font-size: 13px; margin: 0; }
 .banner { padding: 10px 14px; border-radius: 8px; background: var(--warn-soft); color: var(--warn); font-weight: 500; }
 .banner.err { background: var(--bad-soft); color: var(--bad); }
-.grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
+.grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; align-items: start; }
 .grid-main { display: grid; grid-template-columns: 1.6fr 1fr; gap: 18px; }
 @media (max-width: 1000px) { .grid2, .grid-main { grid-template-columns: 1fr; } }
 
@@ -181,3 +181,21 @@ table.t { width: 100%; border-collapse: collapse; font-size: 14px; }
 .linkbtn { background: none; border: 0; color: var(--blue); font-weight: 600; padding: 0; text-decoration: underline; }
 @media (max-width: 800px) { .authpage { grid-template-columns: 1fr; } .authpage .hero { padding: 28px 20px; } .authpage .hero ul { display: none; } }
 @media (prefers-reduced-motion: reduce) { .chev { transition: none; } }
+
+/* ---------- rôles, catégories, rapports, accès ---------- */
+.rolepill { justify-self: start; font-size: 11.5px; font-weight: 600; background: rgba(255, 255, 255, .12); border-radius: 99px; padding: 2px 9px; }
+.headright { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.pill.view { display: inline-flex; align-items: center; gap: 6px; background: var(--warn-soft); color: var(--warn); padding: 5px 11px; font-size: 12.5px; }
+.pill.view svg.ic { width: 15px; height: 15px; }
+select.catsel { width: auto; padding: 5px 8px; font-size: 13px; border-radius: 6px; background: var(--bg); }
+.cats { display: grid; gap: 4px; }
+.catrow { display: grid; gap: 5px; text-align: left; background: transparent; border: 1px solid transparent; border-radius: 8px; padding: 8px 10px; }
+.catrow:hover { background: #f7f9fd; }
+.catrow.on { border-color: var(--blue); background: var(--blue-soft); }
+.catrow .line { display: flex; justify-content: space-between; gap: 8px; font-size: 14px; font-weight: 600; }
+.checks { display: grid; gap: 8px; }
+.check { display: flex; align-items: center; gap: 10px; font-size: 14.5px; cursor: pointer; }
+.check input { width: 18px; height: 18px; accent-color: var(--blue); flex: none; }
+.check.sub { padding-left: 28px; color: var(--muted); }
+.steps { margin: 0; padding-left: 20px; display: grid; gap: 6px; }
+@media (max-width: 900px) { .bottomnav a { font-size: 10px; padding: 6px 0; } .bottomnav svg.ic { width: 17px; height: 17px; } }
