@@ -250,6 +250,76 @@ function DelBtn({ table, id, load, match = 'id', short }) {
   );
 }
 
+/* ---------- modifier une ligne ---------- */
+const CHAMPS = {
+  ventes: [['date', 'Date', 'date'], ['article', 'Article', 'text'], ['montant', 'Montant (F)', 'num0']],
+  depenses: [['date', 'Date', 'date'], ['description', 'Description', 'text', true], ['categorie', 'Catégorie', 'cat'], ['montant', 'Montant (F)', 'num1']],
+  revendeurs: [['date', 'Date', 'date'], ['nom', 'Revendeur', 'text', true], ['dette', 'Dette (F)', 'num0'], ['rembourse', 'Remboursement reçu (F)', 'num0']],
+  prets: [['date', 'Date', 'date'], ['personne', 'Personne', 'text', true], ['type', 'Type', 'type'], ['pret', 'Prêt (F)', 'num0'], ['rembourse', 'Remboursement reçu (F)', 'num0'], ['note', 'Note', 'text']],
+};
+
+function EditBtn({ table, row, load, short }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <>
+      <button type="button" className="lnk" aria-label="Modifier" onClick={e => { e.stopPropagation(); setOpen(true); }}>{short ? '✎' : 'Modifier'}</button>
+      {open && <EditModal table={table} row={row} load={load} close={() => setOpen(false)} />}
+    </>
+  );
+}
+
+function EditModal({ table, row, load, close }) {
+  const champs = CHAMPS[table];
+  const [v, setV] = useState(() => Object.fromEntries(champs.map(([k]) => [k, row[k] ?? ''])));
+  const [err, setErr] = useState('');
+  const [busy, setBusy] = useState(false);
+  useEffect(() => { const k = e => e.key === 'Escape' && close(); addEventListener('keydown', k); return () => removeEventListener('keydown', k); }, [close]);
+
+  async function save(e) {
+    e.preventDefault(); setErr('');
+    const out = {};
+    for (const [k, lab, t, req] of champs) {
+      let x = v[k];
+      if (t.startsWith('num')) {
+        if (x === '' || x == null) x = 0;
+        x = Math.round(Number(x));
+        if (!(x >= (t === 'num1' ? 1 : 0))) return setErr(`${lab} : montant incorrect.`);
+      } else if (t === 'date') x = x || null;
+      else if (t === 'text') { x = String(x || '').trim() || null; if (req && !x) return setErr(`${lab} : à remplir.`); }
+      out[k] = x;
+    }
+    if ((table === 'revendeurs' && !out.dette && !out.rembourse) || (table === 'prets' && !out.pret && !out.rembourse)) return setErr('Mettez un montant de dette, de prêt ou de remboursement.');
+    if (table === 'ventes' && out.montant === 0 && !out.article) out.article = AUCUNE;
+    setBusy(true);
+    const { error } = await supabase.from(table).update(out).eq('id', row.id);
+    setBusy(false);
+    if (error) return setErr("La modification n'a pas marché. Vérifiez la connexion et réessayez.");
+    load([table]); close();
+  }
+
+  return (
+    <div role="dialog" aria-modal="true" aria-label="Modifier la ligne" onClick={e => { e.stopPropagation(); if (e.target === e.currentTarget) close(); }}
+      style={{ position: 'fixed', inset: 0, background: 'rgba(12, 37, 87, .45)', display: 'grid', placeItems: 'center', zIndex: 50, padding: 16, cursor: 'default', textAlign: 'left', fontWeight: 400, textTransform: 'none' }}>
+      <form className="card" onSubmit={save} style={{ width: 'min(440px, 100%)', boxShadow: '0 20px 50px rgba(12, 37, 87, .3)', maxHeight: '90vh', overflowY: 'auto' }}>
+        <div className="card-head"><h2>Modifier</h2><button type="button" className="lnk" onClick={close} aria-label="Fermer">✕</button></div>
+        {champs.map(([k, lab, t]) => (
+          <div className="field" key={k}>
+            <label htmlFor={'e-' + k}>{lab}</label>
+            {t === 'cat' ? <select id={'e-' + k} value={v[k] || 'Autre'} onChange={e => setV({ ...v, [k]: e.target.value })}>{CATEGORIES.map(x => <option key={x} value={x}>{x}</option>)}</select>
+              : t === 'type' ? <select id={'e-' + k} value={v[k] || 'ARGENT'} onChange={e => setV({ ...v, [k]: e.target.value })}><option value="ARGENT">Argent</option><option value="MATERIEL">Matériel</option></select>
+              : <input id={'e-' + k} type={t === 'date' ? 'date' : t.startsWith('num') ? 'number' : 'text'} inputMode={t.startsWith('num') ? 'numeric' : undefined} min={t.startsWith('num') ? 0 : undefined} max={t === 'date' ? today() : undefined} value={v[k] ?? ''} onChange={e => setV({ ...v, [k]: e.target.value })} />}
+          </div>
+        ))}
+        {err && <p className="msg err">{err}</p>}
+        <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end' }}>
+          <button type="button" className="lnk" style={{ padding: '9px 14px' }} onClick={close}>Annuler</button>
+          <button className="btn" disabled={busy}>{busy ? 'Enregistrement…' : 'Enregistrer'}</button>
+        </div>
+      </form>
+    </div>
+  );
+}
+
 const Seg = ({ value, onChange, options, label }) => (
   <div className="seg" role="group" aria-label={label}>
     {options.map(([v, l]) => <button key={v} type="button" className={value === v ? 'on' : ''} onClick={() => onChange(v)}>{l}</button>)}
@@ -613,7 +683,7 @@ function Journee({ S, load, admin }) {
                     <td className="muted num">{heure(v.created_at)}</td>
                     <td>{v.article || <span className="muted">—</span>}</td>
                     <td className="r num pos">{fmt(v.montant)}</td>
-                    {admin && <td><div className="actions"><DelBtn table="ventes" id={v.id} load={load} short /></div></td>}
+                    {admin && <td><div className="actions"><EditBtn table="ventes" row={v} load={load} short /><DelBtn table="ventes" id={v.id} load={load} short /></div></td>}
                   </tr>
                 ))}
                 {vs.length > 0 && <tr className="group"><td colSpan={2}>Total des ventes</td><td className="r num">{fmt(tV)}</td>{admin && <td />}</tr>}
@@ -647,7 +717,7 @@ function Journee({ S, load, admin }) {
                     <td className="muted num">{heure(d.created_at)}</td>
                     <td>{d.description} <span className="muted" style={{ fontSize: 12 }}>· {d.categorie}</span></td>
                     <td className="r num neg">{fmt(d.montant)}</td>
-                    {admin && <td><div className="actions"><DelBtn table="depenses" id={d.id} load={load} short /></div></td>}
+                    {admin && <td><div className="actions"><EditBtn table="depenses" row={d} load={load} short /><DelBtn table="depenses" id={d.id} load={load} short /></div></td>}
                   </tr>
                 ))}
                 {ds.length > 0 && <tr className="group"><td colSpan={2}>Total des dépenses</td><td className="r num">{fmt(tD)}</td>{admin && <td />}</tr>}
@@ -722,7 +792,7 @@ function Ventes({ S, c, load, admin }) {
                         {o && [...j.rows].sort((a, b) => (b.created_at || '').localeCompare(a.created_at || '')).map(v => (
                           <tr className="sub" key={v.id}>
                             <td style={{ paddingLeft: 34 }}>{v.article || 'Vente'} <span className="muted" style={{ fontSize: 12 }}>{v.article === 'Total du jour' || v.article === AUCUNE ? '' : heure(v.created_at)}</span></td>
-                            <td className="r">{admin && <DelBtn table="ventes" id={v.id} load={load} />}</td>
+                            <td className="r">{admin && <div className="actions"><EditBtn table="ventes" row={v} load={load} short /><DelBtn table="ventes" id={v.id} load={load} /></div>}</td>
                             <td className="r num">{fmt(v.montant)}</td>
                           </tr>
                         ))}
@@ -822,7 +892,7 @@ function Depenses({ S, c, load, admin }) {
                   <td>{admin ? <CatSelect d={d} load={load} /> : <span className="pill arg">{d.categorie || 'Autre'}</span>}</td>
                   <td className="muted hide-m">{d.date ? dfr(d.date) : AVANT}</td>
                   <td className="r num neg">{fmt(d.montant)}</td>
-                  {admin && <td><div className="actions"><DelBtn table="depenses" id={d.id} load={load} /></div></td>}
+                  {admin && <td><div className="actions"><EditBtn table="depenses" row={d} load={load} /><DelBtn table="depenses" id={d.id} load={load} /></div></td>}
                 </tr>
               ))}
             </tbody>
@@ -875,7 +945,7 @@ function PersonTable({ groups, table, amountField, withType, load, labels, admin
                         <td className="r num pos">{n(r.rembourse) ? '+ ' + fmt(r.rembourse) : ''}</td>
                         <td />
                         <td className="hide-m" />
-                        <td>{admin && <div className="actions"><DelBtn table={table} id={r.id} load={load} /></div>}</td>
+                        <td>{admin && <div className="actions"><EditBtn table={table} row={r} load={load} short /><DelBtn table={table} id={r.id} load={load} /></div>}</td>
                       </tr>
                     );
                   })}
