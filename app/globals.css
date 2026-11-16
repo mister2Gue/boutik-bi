@@ -50,7 +50,7 @@ svg.ic { width: 18px; height: 18px; flex: none; stroke: currentColor; fill: none
 .pagehead p { margin: 2px 0 0; color: var(--muted); font-size: 13.5px; }
 .soldechip { display: flex; align-items: center; gap: 10px; background: var(--blue-soft); color: var(--blue-dark); border-radius: 999px; padding: 6px 6px 6px 14px; font-size: 13px; font-weight: 600; }
 .soldechip b { background: var(--blue); color: #fff; border-radius: 999px; padding: 4px 12px; font-size: 14px; }
-main.page { padding: 22px 28px 40px; display: grid; gap: 18px; max-width: 1180px; width: 100%; }
+main.page { padding: 22px 28px 40px; display: grid; gap: 18px; width: 100%; max-width: 1800px; }
 
 .mtop, .bottomnav { display: none; }
 @media (max-width: 900px) {
