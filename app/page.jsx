@@ -23,9 +23,19 @@ const P = {
   shield: 'M12 3 5 6v5c0 4.4 3 8.3 7 10 4-1.7 7-5.6 7-10V6z',
   tag: 'M3 12V4a1 1 0 0 1 1-1h8l9 9-9 9zM7.5 7.5h.01',
   cal: 'M7 3v3M17 3v3M4 9h16M5 5h14a1 1 0 0 1 1 1v13a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1Z',
+  store: 'M4 10v9a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-9M3 7l2-4h14l2 4M3 7h18v1a3 3 0 0 1-6 0 3 3 0 0 1-6 0 3 3 0 0 1-6 0zM9 20v-5h6v5',
   eye: 'M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12Zm10 3a3 3 0 1 0 0-6 3 3 0 0 0 0 6Z',
 };
 const Ic = ({ name }) => <svg className="ic" viewBox="0 0 24 24" aria-hidden="true"><path d={P[name]} /></svg>;
+
+const DEFAUT = { nom: 'Boutik bi', slogan: 'Gestion de la boutique', logo: null };
+const initiales = s => String(s || '').split(/\s+/).filter(Boolean).slice(0, 2).map(w => w[0].toUpperCase()).join('') || 'B';
+const Brand = ({ b, small }) => (
+  <div className="brand">
+    <div className="logo" style={b.logo ? { background: '#fff', overflow: 'hidden' } : undefined}>{b.logo ? <img src={b.logo} alt="" style={{ width: '100%', height: '100%', objectFit: 'contain' }} /> : initiales(b.nom)}</div>
+    <div style={{ minWidth: 0 }}><b>{b.nom}</b>{!small && b.slogan && <span>{b.slogan}</span>}</div>
+  </div>
+);
 
 const VIEWS = [
   { id: 'accueil', lab: 'Tableau de bord', short: 'Accueil', ic: 'home', sub: "Vue d'ensemble de la boutique" },
@@ -35,6 +45,7 @@ const VIEWS = [
   { id: 'revendeurs', lab: 'Revendeurs', short: 'Revend.', ic: 'users', sub: 'Ce que les revendeurs vous doivent et ont rendu' },
   { id: 'prets', lab: 'Prêts', short: 'Prêts', ic: 'hand', sub: 'Argent prêté et matériel donné à crédit' },
   { id: 'rapports', lab: 'Rapports PDF', short: 'Rapports', ic: 'file', sub: 'Choisissez la période et les parties, puis téléchargez le PDF' },
+  { id: 'parametres', lab: 'Ma boutique', short: 'Boutique', ic: 'store', sub: 'Nom, slogan et logo de la boutique', admin: true },
   { id: 'acces', lab: 'Accès', short: 'Accès', ic: 'shield', sub: 'Qui peut voir ou modifier les données', admin: true },
 ];
 
@@ -42,6 +53,13 @@ const VIEWS = [
 export default function Home() {
   const [session, setSession] = useState(undefined);
   const [role, setRole] = useState(undefined);
+  const [boutique, setBoutique] = useState(DEFAUT);
+  const chargerBoutique = useCallback(async () => {
+    const { data } = await supabase.from('boutique').select('nom, slogan, logo').eq('id', 1).maybeSingle();
+    if (data) setBoutique({ ...DEFAUT, ...data });
+  }, []);
+  useEffect(() => { chargerBoutique(); }, [chargerBoutique]);
+  useEffect(() => { document.title = boutique.nom; }, [boutique.nom]);
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data }) => setSession(data.session));
@@ -55,7 +73,7 @@ export default function Home() {
   }, [session]);
 
   if (session === undefined || (session && role === undefined)) return <div className="authpage"><div className="formside" style={{ gridColumn: '1 / -1' }}><p className="hint">Chargement…</p></div></div>;
-  if (!session) return <Auth />;
+  if (!session) return <Auth boutique={boutique} />;
   if (!role) return (
     <div className="authpage"><div className="formside" style={{ gridColumn: '1 / -1' }}><div className="authbox">
       <h2>Accès pas encore autorisé</h2>
@@ -63,11 +81,11 @@ export default function Home() {
       <button className="btn" onClick={() => supabase.auth.signOut()}>Se déconnecter</button>
     </div></div></div>
   );
-  return <App session={session} admin={role === 'admin'} />;
+  return <App session={session} admin={role === 'admin'} boutique={boutique} rechargerBoutique={chargerBoutique} />;
 }
 
 /* ---------- connexion ---------- */
-function Auth() {
+function Auth({ boutique }) {
   const [mode, setMode] = useState('login');
   const [email, setEmail] = useState('');
   const [pw, setPw] = useState('');
@@ -87,7 +105,7 @@ function Auth() {
   return (
     <div className="authpage">
       <div className="hero">
-        <div className="brand"><div className="logo">Bb</div><div><b>Boutik bi</b><span>Gestion de la boutique</span></div></div>
+        <Brand b={boutique} />
         <h2>Suivez votre caisse, vos ventes et ce qu'on vous doit.</h2>
         <ul>
           <li><Ic name="check" /> Vente du jour notée en quelques secondes</li>
@@ -118,7 +136,7 @@ function Auth() {
 }
 
 /* ---------- application ---------- */
-function App({ session, admin }) {
+function App({ session, admin, boutique, rechargerBoutique }) {
   const views = VIEWS.filter(v => !v.admin || admin);
   const [view, setView] = useState('accueil');
   const [S, setS] = useState({ ventes: [], depenses: [], revendeurs: [], prets: [], caisse: null });
@@ -153,13 +171,13 @@ function App({ session, admin }) {
 
   const c = useMemo(() => calculs(S), [S]);
   const V = views.find(v => v.id === view) || views[0];
-  const ctx = { S, c, load, admin, session, maj };
+  const ctx = { S, c, load, admin, session, maj, boutique };
   const logout = <button className="logout" onClick={() => supabase.auth.signOut()}><Ic name="logout" /> Se déconnecter</button>;
 
   return (
     <div className="app">
       <aside className="side">
-        <div className="brand"><div className="logo">Bb</div><div><b>Boutik bi</b><span>Gestion de la boutique</span></div></div>
+        <Brand b={boutique} />
         <nav className="menu" aria-label="Menu">
           {views.map(v => <a key={v.id} href={'#' + v.id} className={V.id === v.id ? 'on' : ''}><Ic name={v.ic} />{v.lab}</a>)}
         </nav>
@@ -167,7 +185,7 @@ function App({ session, admin }) {
       </aside>
 
       <div className="content">
-        <div className="mtop"><div className="brand"><div className="logo">Bb</div><div><b>Boutik bi</b></div></div>{logout}</div>
+        <div className="mtop"><Brand b={boutique} small />{logout}</div>
         <header className="pagehead">
           <div><h1>{V.lab}</h1><p>{V.sub}</p></div>
           <div className="headright">
@@ -185,6 +203,7 @@ function App({ session, admin }) {
           {loaded && V.id === 'revendeurs' && <Revendeurs {...ctx} />}
           {loaded && V.id === 'prets' && <Prets {...ctx} />}
           {loaded && V.id === 'rapports' && <Rapports {...ctx} />}
+          {loaded && V.id === 'parametres' && admin && <Parametres boutique={boutique} recharger={rechargerBoutique} />}
           {loaded && V.id === 'acces' && admin && <Acces {...ctx} />}
         </main>
       </div>
@@ -981,7 +1000,7 @@ const PARTIES = [
   ['soldes', 'Inclure les personnes qui ont tout remboursé'],
 ];
 
-function Rapports({ S }) {
+function Rapports({ S, boutique }) {
   const [preset, setPreset] = useState('tout');
   const [du, setDu] = useState(today().slice(0, 8) + '01');
   const [au, setAu] = useState(today());
@@ -1024,13 +1043,74 @@ function Rapports({ S }) {
           setBusy(true); setMsg({ t: '', c: '' });
           try {
             const { genererRapport } = await import('../lib/rapport');
-            await genererRapport(S, { ...parts, ventesDetail: parts.ventes && parts.ventesDetail, depensesDetail: parts.depenses && parts.depensesDetail, ...p, aujourdhui: today() });
+            await genererRapport(S, { ...parts, ventesDetail: parts.ventes && parts.ventesDetail, depensesDetail: parts.depenses && parts.depensesDetail, ...p, aujourdhui: today(), boutique });
             setMsg({ t: 'Le PDF est téléchargé.', c: 'ok' });
           } catch (e) { setMsg({ t: "Le PDF n'a pas pu être créé. Réessayez.", c: 'err' }); }
           setBusy(false);
         }}><Ic name="file" /> {busy ? 'Création du PDF…' : 'Télécharger le PDF'}</button>
         {aucun && <p className="msg err">Cochez au moins une partie.</p>}
         <p className={'msg ' + msg.c}>{msg.t}</p>
+      </div>
+    </div>
+  );
+}
+
+/* ---------- ma boutique ---------- */
+function Parametres({ boutique, recharger }) {
+  const [nom, setNom] = useState(boutique.nom);
+  const [slogan, setSlogan] = useState(boutique.slogan || '');
+  const [logo, setLogo] = useState(boutique.logo || null);
+  const [err, setErr] = useState('');
+  const [msg, run] = useSave();
+  const apercu = { nom: nom.trim() || 'Ma boutique', slogan: slogan.trim(), logo };
+
+  const choisir = e => {
+    const f = e.target.files?.[0]; e.target.value = ''; setErr('');
+    if (!f) return;
+    if (!f.type.startsWith('image/')) { setErr('Choisissez une image (photo, PNG ou JPG).'); return; }
+    const url = URL.createObjectURL(f), img = new Image();
+    img.onload = () => {
+      const k = Math.min(1, 256 / Math.max(img.width, img.height));
+      const cv = document.createElement('canvas'); cv.width = Math.round(img.width * k); cv.height = Math.round(img.height * k);
+      cv.getContext('2d').drawImage(img, 0, 0, cv.width, cv.height);
+      URL.revokeObjectURL(url);
+      setLogo(cv.toDataURL('image/png'));
+    };
+    img.onerror = () => { URL.revokeObjectURL(url); setErr("Cette image n'a pas pu être lue. Essayez une autre."); };
+    img.src = url;
+  };
+
+  return (
+    <div className="grid-main">
+      <div className="card">
+        <h2>Identité de la boutique</h2>
+        <form className="row" onSubmit={async e => {
+          e.preventDefault(); if (!nom.trim()) return;
+          if (await run(() => supabase.from('boutique').upsert({ id: 1, nom: nom.trim(), slogan: slogan.trim() || null, logo, maj_le: new Date().toISOString() }), 'Boutique enregistrée.')) recharger();
+        }}>
+          <div className="field full"><label htmlFor="b-nom">Nom de la boutique</label><input id="b-nom" required maxLength={60} value={nom} onChange={e => setNom(e.target.value)} /></div>
+          <div className="field full"><label htmlFor="b-slogan">Slogan ou petite phrase (facultatif)</label><input id="b-slogan" maxLength={80} placeholder="ex : Accessoires téléphone et électronique" value={slogan} onChange={e => setSlogan(e.target.value)} /></div>
+          <div className="field full">
+            <label htmlFor="b-logo">Logo</label>
+            <div style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
+              <div className="logo" style={{ width: 64, height: 64, borderRadius: 14, background: 'var(--blue)', color: '#fff', display: 'grid', placeItems: 'center', font: '700 22px var(--display)', overflow: 'hidden', flex: 'none' }}>
+                {logo ? <img src={logo} alt="Logo" style={{ width: '100%', height: '100%', objectFit: 'contain', background: '#fff' }} /> : initiales(apercu.nom)}
+              </div>
+              <label className="lnk" htmlFor="b-logo" style={{ cursor: 'pointer', padding: '8px 12px' }}>{logo ? 'Changer le logo' : 'Choisir une image'}</label>
+              <input id="b-logo" type="file" accept="image/*" onChange={choisir} style={{ position: 'absolute', opacity: 0, width: 1, height: 1 }} />
+              {logo && <button type="button" className="lnk" onClick={() => setLogo(null)}>Retirer le logo</button>}
+            </div>
+            <span className="hint">Une photo ou une image carrée marche le mieux. Sans logo, les initiales du nom s'affichent.</span>
+            {err && <span className="msg err">{err}</span>}
+          </div>
+          <button className="btn" type="submit">Enregistrer</button>
+        </form>
+        <p className={'msg ' + msg.c}>{msg.t}</p>
+      </div>
+      <div className="card">
+        <h2>Aperçu</h2>
+        <div style={{ background: 'var(--blue-dark)', color: '#dbe5f7', borderRadius: 10, padding: '16px 10px' }}><Brand b={apercu} /></div>
+        <p className="hint">Le nom et le logo apparaissent dans le menu, sur l'écran de connexion et en haut des rapports PDF.</p>
       </div>
     </div>
   );
