@@ -1,4 +1,5 @@
 import './globals.css';
+import Porte from './Porte';
 
 export const metadata = {
   title: 'Boutik bi',
@@ -14,7 +15,7 @@ export default function RootLayout({ children }) {
         <link rel="preconnect" href="https://fonts.googleapis.com" />
         <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" />
       </head>
-      <body>{children}</body>
+      <body>{children}<Porte /></body>
     </html>
   );
 }
