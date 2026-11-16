@@ -5,6 +5,7 @@ import { supabase } from '../lib/supabase';
 import { CATEGORIES, STOCK, calculs, dfr, fmt, groupBy, key, moisFr, n, parJour, recent, sum, today } from '../lib/outils';
 
 const AVANT = "Avant l'application";
+const AUCUNE = 'Aucune vente';
 
 /* ---------- icônes ---------- */
 const P = {
@@ -507,7 +508,7 @@ function Donut({ depenses, total }) {
 
 function Activite({ S }) {
   const items = [
-    ...S.ventes.map(v => ({ id: 'v' + v.id, date: v.date, ts: v.created_at, txt: v.article && v.article !== 'Total du jour' ? 'Vente · ' + v.article : 'Vente', mt: n(v.montant), sens: 1, ic: 'cart', href: '#ventes' })),
+    ...S.ventes.map(v => ({ id: 'v' + v.id, date: v.date, ts: v.created_at, txt: v.article === AUCUNE ? 'Aucune vente' : v.article && v.article !== 'Total du jour' ? 'Vente · ' + v.article : 'Vente', mt: n(v.montant), sens: 1, ic: 'cart', href: '#ventes' })),
     ...S.depenses.filter(d => d.date).map(d => ({ id: 'd' + d.id, date: d.date, ts: d.created_at, txt: d.description, sub: d.categorie, mt: n(d.montant), sens: -1, ic: 'out', href: '#depenses' })),
     ...S.revendeurs.filter(r => r.date).map(r => ({ id: 'r' + r.id, date: r.date, ts: r.created_at, txt: (n(r.rembourse) && !n(r.dette) ? 'Remboursement · ' : 'Dette · ') + r.nom, mt: n(r.rembourse) || n(r.dette), sens: n(r.rembourse) && !n(r.dette) ? 1 : 0, ic: 'users', href: '#revendeurs' })),
     ...S.prets.filter(p => p.date).map(p => ({ id: 'p' + p.id, date: p.date, ts: p.created_at, txt: (n(p.rembourse) && !n(p.pret) ? 'Remboursement · ' : 'Prêt · ') + p.personne, mt: n(p.rembourse) || n(p.pret), sens: n(p.rembourse) && !n(p.pret) ? 1 : p.type === 'MATERIEL' ? 0 : -1, ic: 'hand', href: '#prets' })),
@@ -545,8 +546,9 @@ function Journee({ S, load, admin }) {
   const tri = a => [...a].sort((x, y) => (y.created_at || '').localeCompare(x.created_at || ''));
   const vs = tri(S.ventes.filter(v => v.date === jour)), ds = tri(S.depenses.filter(d => d.date === jour));
   const tV = sum(vs, 'montant'), tD = sum(ds, 'montant'), bilan = tV - tD;
+  const nbV = vs.filter(v => n(v.montant) > 0).length;
   const hier = sum(S.ventes.filter(v => v.date === addDays(jour, -1)), 'montant');
-  const articles = [...new Set(S.ventes.map(v => String(v.article || '').trim()).filter(a => a && a !== 'Total du jour'))];
+  const articles = [...new Set(S.ventes.map(v => String(v.article || '').trim()).filter(a => a && a !== 'Total du jour' && a !== AUCUNE))];
   const descs = [...new Set(S.depenses.map(d => String(d.description || '').trim()).filter(Boolean))];
   const lastCat = txt => { const k = key(txt); const d = recent(S.depenses).find(x => key(x.description) === k); return d?.categorie; };
   const estAujourdhui = jour === today();
@@ -562,23 +564,24 @@ function Journee({ S, load, admin }) {
       </div>
 
       <div className="kpis">
-        <KpiLive cls="good" ic="cart" lab="Ventes du jour" val={tV} sub={`${vs.length} vente${vs.length > 1 ? 's' : ''}${hier ? ` · veille ${fmt(hier)}` : ''}`} />
+        <KpiLive cls="good" ic="cart" lab="Ventes du jour" val={tV} sub={`${nbV} vente${nbV > 1 ? 's' : ''}${vs.length && !nbV ? ' (journée sans vente)' : ''}${hier ? ` · veille ${fmt(hier)}` : ''}`} />
         <KpiLive cls="bad" ic="out" lab="Dépenses du jour" val={tD} sub={`${ds.length} dépense${ds.length > 1 ? 's' : ''}`} />
         <KpiLive cls="primary" ic="wallet" lab="Bilan du jour" val={bilan} sub="Ventes − dépenses du jour" />
-        <KpiLive ic="trend" lab="Vente moyenne" val={vs.length ? tV / vs.length : 0} sub="Par vente notée" />
+        <KpiLive ic="trend" lab="Vente moyenne" val={nbV ? tV / nbV : 0} sub="Par vente notée" />
       </div>
 
       <div className="grid2">
         <div className="card">
           <div className="card-head"><h2>Ventes</h2><b className="num pos">{fmt(tV)}</b></div>
           {admin && <form className="row" onSubmit={async e => {
-            e.preventDefault(); const m = Math.round(Number(vmt)); if (!(m > 0)) return;
-            if (await vrun(() => supabase.from('ventes').insert({ date: jour, montant: m, article: art.trim() || null }), `Vente de ${fmt(m)} ajoutée.`)) { setVmt(''); setArt(''); load(['ventes']); vRef.current?.focus(); }
+            e.preventDefault(); const m = Math.round(Number(vmt)); if (vmt === '' || !(m >= 0)) return;
+            if (await vrun(() => supabase.from('ventes').insert({ date: jour, montant: m, article: art.trim() || (m === 0 ? AUCUNE : null) }), m === 0 ? 'Journée sans vente notée.' : `Vente de ${fmt(m)} ajoutée.`)) { setVmt(''); setArt(''); load(['ventes']); vRef.current?.focus(); }
           }}>
             <div className="field wide"><label htmlFor="j-art">Article (facultatif)</label><input id="j-art" list="dl-art" placeholder="ex : chargeur, écouteurs" value={art} onChange={e => setArt(e.target.value)} /></div>
-            <div className="field"><label htmlFor="j-vmt">Montant (F)</label><input id="j-vmt" ref={vRef} type="number" inputMode="numeric" min="1" step="1" required value={vmt} onChange={e => setVmt(e.target.value)} /></div>
+            <div className="field"><label htmlFor="j-vmt">Montant (F)</label><input id="j-vmt" ref={vRef} type="number" inputMode="numeric" min="0" step="1" required value={vmt} onChange={e => setVmt(e.target.value)} /></div>
             <button className="btn" type="submit">+ Vente</button>
           </form>}
+          {admin && vs.length === 0 && <button type="button" className="lnk" style={{ justifySelf: 'start', padding: '8px 12px', borderStyle: 'dashed', color: 'var(--blue)', borderColor: 'var(--blue)' }} onClick={() => vrun(() => supabase.from('ventes').insert({ date: jour, montant: 0, article: AUCUNE }), 'Journée sans vente notée.').then(ok => ok && load(['ventes']))}>Pas de vente {estAujourdhui ? "aujourd'hui" : 'ce jour-là'} (0 F)</button>}
           <datalist id="dl-art">{articles.map(a => <option key={a} value={a} />)}</datalist>
           {admin && <p className={'msg ' + vmsg.c}>{vmsg.t}</p>}
           <div className="tablewrap">
@@ -668,12 +671,12 @@ function Ventes({ S, c, load, admin }) {
       {admin && <div className="card">
         <div className="card-head"><h2>Ajouter une vente</h2><a className="hint" href="#journee">Ou utilisez « Ma journée » pour voir le total du jour</a></div>
         <form className="row" onSubmit={async e => {
-          e.preventDefault(); const m = Math.round(Number(mt)); if (!date || !(m > 0)) return;
-          if (await run(() => supabase.from('ventes').insert({ date, montant: m, article: art.trim() || null }), `Vente de ${fmt(m)} ajoutée au ${dfr(date)}.`)) { setMt(''); setArt(''); load(['ventes']); }
+          e.preventDefault(); const m = Math.round(Number(mt)); if (!date || mt === '' || !(m >= 0)) return;
+          if (await run(() => supabase.from('ventes').insert({ date, montant: m, article: art.trim() || (m === 0 ? AUCUNE : null) }), m === 0 ? `${dfr(date)} noté sans vente.` : `Vente de ${fmt(m)} ajoutée au ${dfr(date)}.`)) { setMt(''); setArt(''); load(['ventes']); }
         }}>
           <div className="field"><label htmlFor="v-date">Date</label><input id="v-date" type="date" required value={date} max={today()} onChange={e => setDate(e.target.value)} /></div>
           <div className="field wide"><label htmlFor="v-art">Article (facultatif)</label><input id="v-art" placeholder="ex : chargeur" value={art} onChange={e => setArt(e.target.value)} /></div>
-          <div className="field"><label htmlFor="v-mt">Montant (F)</label><input id="v-mt" type="number" inputMode="numeric" min="1" step="1" required value={mt} onChange={e => setMt(e.target.value)} /></div>
+          <div className="field"><label htmlFor="v-mt">Montant (F)</label><input id="v-mt" type="number" inputMode="numeric" min="0" step="1" required value={mt} onChange={e => setMt(e.target.value)} /></div>
           <button className="btn" type="submit">+ Vente</button>
         </form>
         <p className={'msg ' + msg.c}>{msg.t}</p>
@@ -699,7 +702,7 @@ function Ventes({ S, c, load, admin }) {
                         </tr>
                         {o && [...j.rows].sort((a, b) => (b.created_at || '').localeCompare(a.created_at || '')).map(v => (
                           <tr className="sub" key={v.id}>
-                            <td style={{ paddingLeft: 34 }}>{v.article || 'Vente'} <span className="muted" style={{ fontSize: 12 }}>{v.article === 'Total du jour' ? '' : heure(v.created_at)}</span></td>
+                            <td style={{ paddingLeft: 34 }}>{v.article || 'Vente'} <span className="muted" style={{ fontSize: 12 }}>{v.article === 'Total du jour' || v.article === AUCUNE ? '' : heure(v.created_at)}</span></td>
                             <td className="r">{admin && <DelBtn table="ventes" id={v.id} load={load} />}</td>
                             <td className="r num">{fmt(v.montant)}</td>
                           </tr>
