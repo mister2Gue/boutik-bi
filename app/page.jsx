@@ -1,6 +1,6 @@
 'use client';
 
-import { Fragment, useCallback, useEffect, useMemo, useState } from 'react';
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { supabase } from '../lib/supabase';
 import { CATEGORIES, STOCK, calculs, dfr, fmt, groupBy, key, moisFr, n, recent, sum, today } from '../lib/outils';
 
@@ -121,6 +121,7 @@ function App({ session, admin }) {
   const [S, setS] = useState({ ventes: [], depenses: [], revendeurs: [], prets: [], caisse: null });
   const [loaded, setLoaded] = useState(false);
   const [err, setErr] = useState('');
+  const [maj, setMaj] = useState('');
 
   useEffect(() => {
     const read = () => { const h = location.hash.slice(1); setView(VIEWS.some(v => v.id === h) ? h : 'accueil'); scrollTo(0, 0); };
@@ -137,12 +138,19 @@ function App({ session, admin }) {
       return next;
     });
     setLoaded(true);
+    const d = new Date(); setMaj(`${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`);
   }, []);
   useEffect(() => { load(); }, [load]);
+  useEffect(() => {
+    const fresh = () => { if (document.visibilityState === 'visible') load(); };
+    const t = setInterval(fresh, 60000);
+    addEventListener('focus', fresh); document.addEventListener('visibilitychange', fresh);
+    return () => { clearInterval(t); removeEventListener('focus', fresh); document.removeEventListener('visibilitychange', fresh); };
+  }, [load]);
 
   const c = useMemo(() => calculs(S), [S]);
   const V = views.find(v => v.id === view) || views[0];
-  const ctx = { S, c, load, admin, session };
+  const ctx = { S, c, load, admin, session, maj };
   const logout = <button className="logout" onClick={() => supabase.auth.signOut()}><Ic name="logout" /> Se déconnecter</button>;
 
   return (
@@ -228,25 +236,117 @@ const Seg = ({ value, onChange, options, label }) => (
 const Bar = ({ d, r }) => <div className="bar"><i style={{ width: (d > 0 ? Math.min(100, Math.max(0, r / d * 100)) : 100) + '%' }} /></div>;
 
 /* ---------- tableau de bord ---------- */
-function Accueil({ S, c, load, admin }) {
+const addDays = (s, k) => { const d = new Date(s + 'T00:00:00Z'); d.setUTCDate(d.getUTCDate() + k); return d.toISOString().slice(0, 10); };
+const ecart = (a, b) => Math.round((new Date(b + 'T00:00:00Z') - new Date(a + 'T00:00:00Z')) / 86400000);
+const PERIODES = [['7j', '7 jours'], ['30j', '30 jours'], ['mois', 'Ce mois'], ['moisdernier', 'Mois dernier'], ['tout', 'Tout']];
+
+function bornes(id) {
+  const t = today(), [y, m, d] = t.split('-').map(Number);
+  const pad = x => String(x).padStart(2, '0');
+  const finMois = (yy, mm) => `${yy}-${pad(mm)}-${pad(new Date(Date.UTC(yy, mm, 0)).getUTCDate())}`;
+  const moisAvant = (yy, mm) => (mm === 1 ? [yy - 1, 12] : [yy, mm - 1]);
+  if (id === '7j' || id === '30j') {
+    const k = id === '7j' ? 7 : 30, du = addDays(t, -(k - 1));
+    return { du, au: t, pdu: addDays(du, -k), pau: addDays(du, -1), lab: `${k} jours précédents` };
+  }
+  if (id === 'mois') {
+    const [py, pm] = moisAvant(y, m);
+    const pau = `${py}-${pad(pm)}-${pad(Math.min(d, +finMois(py, pm).slice(8)))}`;
+    return { du: `${y}-${pad(m)}-01`, au: t, pdu: `${py}-${pad(pm)}-01`, pau, lab: `même période de ${moisFr(`${py}-${pad(pm)}`)}` };
+  }
+  if (id === 'moisdernier') {
+    const [py, pm] = moisAvant(y, m), [qy, qm] = moisAvant(py, pm);
+    return { du: `${py}-${pad(pm)}-01`, au: finMois(py, pm), pdu: `${qy}-${pad(qm)}-01`, pau: finMois(qy, qm), lab: moisFr(`${qy}-${pad(qm)}`) };
+  }
+  return { tout: true };
+}
+
+function useCountUp(value, ms = 650) {
+  const [v, setV] = useState(value);
+  const prev = useRef(value);
+  useEffect(() => {
+    const from = prev.current; prev.current = value;
+    if (from === value || (typeof matchMedia !== 'undefined' && matchMedia('(prefers-reduced-motion: reduce)').matches)) { setV(value); return; }
+    let raf; const t0 = performance.now();
+    const step = t => { const k = Math.min(1, (t - t0) / ms), e = 1 - Math.pow(1 - k, 3); setV(from + (value - from) * e); if (k < 1) raf = requestAnimationFrame(step); };
+    raf = requestAnimationFrame(step);
+    return () => cancelAnimationFrame(raf);
+  }, [value, ms]);
+  return v;
+}
+
+function Delta({ cur, prev, inverse, lab }) {
+  if (prev == null) return null;
+  if (!prev && !cur) return <span className="delta flat">= {lab}</span>;
+  if (!prev) return <span className={'delta ' + (inverse ? 'down' : 'up')}>nouveau vs {lab}</span>;
+  const p = Math.round((cur - prev) / Math.abs(prev) * 100);
+  const bon = inverse ? p < 0 : p > 0;
+  return <span className={'delta ' + (p === 0 ? 'flat' : bon ? 'up' : 'down')} title={`Avant : ${fmt(prev)}`}>{p > 0 ? '▲' : p < 0 ? '▼' : '='} {Math.abs(p)} % vs {lab}</span>;
+}
+
+function KpiLive({ lab, val, ic, cls = '', sub, href, delta }) {
+  const v = useCountUp(val);
+  const Tag = href ? 'a' : 'div';
+  return (
+    <Tag className={'kpi ' + cls + (href ? ' link' : '')} href={href}>
+      <div className="top"><span>{lab}</span><span className="ico"><Ic name={ic} /></span></div>
+      <span className="val num">{fmt(v)}</span>
+      {delta}
+      {sub && <span className="sub">{sub}</span>}
+    </Tag>
+  );
+}
+
+function Accueil({ S, c, load, admin, maj }) {
+  const [per, setPer] = useState('30j');
   const [val, setVal] = useState(S.caisse?.en_main ?? '');
   const [msg, run] = useSave();
+  const b = bornes(per);
+  const dans = (d, du, au) => !!d && d >= du && d <= au;
+  const pick = (rows, du, au) => (b.tout ? rows : rows.filter(r => dans(r.date, du, au)));
+  const V = pick(S.ventes, b.du, b.au), D = pick(S.depenses, b.du, b.au);
+  const Vp = b.tout ? null : S.ventes.filter(r => dans(r.date, b.pdu, b.pau)), Dp = b.tout ? null : S.depenses.filter(r => dans(r.date, b.pdu, b.pau));
+  const totV = sum(V, 'montant'), totD = sum(D, 'montant');
+  const prevV = Vp && sum(Vp, 'montant'), prevD = Dp && sum(Dp, 'montant');
+  const remb = sum(pick(S.revendeurs, b.du, b.au), 'rembourse') + sum(pick(S.prets, b.du, b.au), 'rembourse');
   const enMain = S.caisse?.en_main ?? null;
   const m = enMain == null ? null : c.solde - n(enMain);
   const aRecup = c.revReste + c.argReste + c.matReste;
   const top = groupBy(S.revendeurs, 'nom', 'dette', 'rembourse').filter(g => g.d - g.r > 0).slice(0, 5);
+  const derniere = S.ventes.reduce((x, v) => (v.date > x ? v.date : x), '');
+  const retard = derniere ? ecart(derniere, today()) : null;
+  const nbJours = b.tout ? S.ventes.length : ecart(b.du, b.au) + 1;
 
   return (
     <>
+      <div className="dashbar">
+        <div className="chips" role="group" aria-label="Période">
+          {PERIODES.map(([id, l]) => <button key={id} type="button" className={'chip' + (per === id ? ' on' : '')} onClick={() => setPer(id)}>{l}</button>)}
+        </div>
+        <div className="majinfo">
+          <span className="livedot" aria-hidden="true" /> {b.tout ? 'Toutes les données' : `Du ${dfr(b.du)} au ${dfr(b.au)}`}
+          <button type="button" className="lnk" onClick={() => load()} title="Recharger les données">Actualiser{maj ? ` · ${maj}` : ''}</button>
+        </div>
+      </div>
+
+      {(retard > 1 || (m != null && m > 0)) && (
+        <div className="alerts">
+          {retard > 1 && <a className="alert warn" href="#ventes"><Ic name="clock" /><span><b>Aucune vente notée depuis le {dfr(derniere)}</b> ({retard} jours).{admin && ' Touchez ici pour noter les ventes.'}</span></a>}
+          {m != null && m > 0 && <div className="alert bad"><Ic name="wallet" /><span><b>Il manque {fmt(m)}</b> dans la caisse par rapport au solde.</span></div>}
+        </div>
+      )}
+
       <div className="kpis">
-        <Kpi cls="primary" ic="wallet" lab="Solde" val={c.solde} sub="Argent qui devrait être en caisse" />
-        <Kpi cls="good" ic="trend" lab={'Ventes ' + moisFr(c.ym)} val={c.ventesMois} sub={`${c.joursMois} jour${c.joursMois > 1 ? 's' : ''} noté${c.joursMois > 1 ? 's' : ''} · moyenne ${fmt(c.moyenne)}/jour`} />
-        <Kpi cls="bad" ic="out" lab="Dépenses" val={c.depenses} sub={`Dont ${fmt(c.stock)} d'achat de stock`} />
-        <Kpi cls="warn" ic="clock" lab="À récupérer" val={aRecup} sub="Revendeurs + prêts" />
+        <KpiLive cls="primary" ic="wallet" lab="Solde actuel" val={c.solde} sub="Argent qui devrait être en caisse" />
+        <KpiLive cls="good" ic="trend" lab="Ventes" val={totV} href="#ventes" delta={<Delta cur={totV} prev={prevV} lab={b.lab} />}
+          sub={`${V.length} jour${V.length > 1 ? 's' : ''} noté${V.length > 1 ? 's' : ''}${b.tout ? '' : ` sur ${nbJours}`} · ${fmt(V.length ? totV / V.length : 0)}/jour`} />
+        <KpiLive cls="bad" ic="out" lab="Dépenses" val={totD} href="#depenses" delta={<Delta cur={totD} prev={prevD} inverse lab={b.lab} />}
+          sub={`${D.length} dépense${D.length > 1 ? 's' : ''}`} />
+        <KpiLive cls="warn" ic="hand" lab="Remboursements reçus" val={remb} href="#revendeurs" sub={`Encore ${fmt(aRecup)} à récupérer`} />
       </div>
 
       <div className="grid-main">
-        <Chart ventes={S.ventes} />
+        <ChartLive ventes={V} per={per} tout={b.tout} />
         <div className="card">
           <div className="card-head"><h2>Contrôle de caisse</h2></div>
           {admin && <>
@@ -270,64 +370,156 @@ function Accueil({ S, c, load, admin }) {
         </div>
       </div>
 
-      <div className="grid2">
+      <div className="grid3">
+        <Donut depenses={D} total={totD} />
         <div className="card">
-          <div className="card-head"><h2>Revendeurs qui doivent le plus</h2><a className="hint" href="#revendeurs">Tout voir</a></div>
+          <div className="card-head"><h2>Qui doit le plus</h2><a className="hint" href="#revendeurs">Tout voir</a></div>
           <div className="rank">
             {top.length === 0 && <p className="hint">Aucun revendeur ne vous doit d'argent.</p>}
-            {top.map(g => (
-              <div className="item" key={g.k}>
+            {top.map((g, i) => (
+              <a className="item" key={g.k} href="#revendeurs" style={{ animationDelay: i * 60 + 'ms' }}>
                 <div className="line"><span>{g.nom}</span><b className="num">{fmt(g.d - g.r)}</b></div>
                 <Bar d={g.d} r={g.r} />
-              </div>
+              </a>
             ))}
           </div>
-        </div>
-        <div className="card">
-          <div className="card-head"><h2>Détail de ce qu'on vous doit</h2></div>
           <div className="breakdown">
             <div className="line"><span>Revendeurs</span><span className="num">{fmt(c.revReste)}</span></div>
             <div className="line"><span>Argent prêté</span><span className="num">{fmt(c.argReste)}</span></div>
-            <div className="line"><span>Matériel donné à crédit</span><span className="num">{fmt(c.matReste)}</span></div>
+            <div className="line"><span>Matériel à crédit</span><span className="num">{fmt(c.matReste)}</span></div>
             <div className="line"><span>Total à récupérer</span><span className="num">{fmt(aRecup)}</span></div>
           </div>
         </div>
+        <Activite S={S} />
       </div>
     </>
   );
 }
 
-function Chart({ ventes }) {
-  const vs = [...ventes].sort((a, b) => a.date.localeCompare(b.date)).slice(-30);
-  if (!vs.length) return <div className="card"><h2>Ventes</h2><p className="hint">Pas encore de ventes.</p></div>;
-  const avg = sum(vs, 'montant') / vs.length;
-  const W = 640, H = 220, L = 46, B = 24, T = 10, R = 8;
-  const max = Math.max(...vs.map(v => n(v.montant)), 1);
-  const p = Math.pow(10, Math.floor(Math.log10(max)));
-  const step = max / p < 3 ? p / 2 : p;
+function ChartLive({ ventes, per, tout }) {
+  const [mode, setMode] = useState(null);
+  const [hover, setHover] = useState(null);
+  const auto = tout ? 'mois' : per === '7j' || per === '30j' || per === 'mois' || per === 'moisdernier' ? 'jour' : 'semaine';
+  const md = mode || auto;
+  useEffect(() => { setMode(null); setHover(null); }, [per]);
+  const lundi = s => { const d = new Date(s + 'T00:00:00Z'); const k = (d.getUTCDay() + 6) % 7; return addDays(s, -k); };
+  const groups = new Map();
+  [...ventes].sort((a, b) => a.date.localeCompare(b.date)).forEach(v => {
+    const k = md === 'jour' ? v.date : md === 'semaine' ? lundi(v.date) : v.date.slice(0, 7);
+    groups.set(k, (groups.get(k) || 0) + n(v.montant));
+  });
+  const pts = [...groups.entries()].map(([k, t]) => ({ k, t }));
+  const label = k => md === 'mois' ? moisFr(k) : md === 'semaine' ? `Semaine du ${dfr(k)}` : dfr(k);
+  const court = k => { if (md === 'mois') return MOIS_COURTS[+k.slice(5) - 1]; const [, mo, d] = k.split('-'); return `${+d}/${+mo}`; };
+  const W = 640, H = 230, L = 46, B = 24, T = 14, R = 8;
+  const max = Math.max(...pts.map(p => p.t), 1);
+  const p10 = Math.pow(10, Math.floor(Math.log10(max)));
+  const step = max / p10 < 3 ? p10 / 2 : p10;
   const top = Math.ceil(max / step) * step;
   const y = v => T + (H - T - B) * (1 - v / top);
-  const bw = (W - L - R) / vs.length;
+  const bw = (W - L - R) / Math.max(pts.length, 1);
+  const avg = pts.length ? sum(pts, 't') / pts.length : 0;
+  const best = pts.reduce((a, p, i) => (p.t > (pts[a]?.t ?? -1) ? i : a), 0);
+  const every = Math.max(1, Math.ceil(pts.length / 8));
   const grid = []; for (let g = 0; g <= top; g += step) grid.push(g);
+  const h = hover != null ? pts[hover] : null;
+
   return (
     <div className="card">
-      <div className="card-head"><h2>Ventes des 30 derniers jours notés</h2><span className="hint">Moyenne {fmt(avg)}/jour (ligne pointillée)</span></div>
-      <div className="chart">
-        <svg viewBox={`0 0 ${W} ${H}`} role="img" aria-label="Ventes par jour">
-          {grid.map(g => <g key={g}><line x1={L} x2={W - R} y1={y(g)} y2={y(g)} stroke="var(--line)" /><text x={L - 6} y={y(g) + 4} textAnchor="end">{g >= 1000 ? g / 1000 + 'k' : g}</text></g>)}
-          {vs.map((v, i) => {
-            const last = i === vs.length - 1, x = L + i * bw + bw * 0.18, [, mo, d] = v.date.split('-');
-            return (
-              <g key={v.date}>
-                <rect x={x} y={y(n(v.montant))} width={bw * 0.64} height={Math.max(0, H - B - y(n(v.montant)))} rx="2" fill={last ? 'var(--blue-dark)' : 'var(--blue)'} opacity={last ? 1 : 0.85}>
-                  <title>{dfr(v.date)} : {fmt(v.montant)}</title>
-                </rect>
-                {(i % 5 === 0 || last) && <text x={x + bw * 0.32} y={H - 6} textAnchor="middle">{+d}/{+mo}</text>}
-              </g>
-            );
-          })}
-          <line x1={L} x2={W - R} y1={y(avg)} y2={y(avg)} stroke="var(--warn)" strokeDasharray="5 4" strokeWidth="1.5" />
-        </svg>
+      <div className="card-head">
+        <h2>Évolution des ventes</h2>
+        <Seg label="Regrouper par" value={md} onChange={v => { setMode(v); setHover(null); }} options={[['jour', 'Jour'], ['semaine', 'Semaine'], ['mois', 'Mois']]} />
+      </div>
+      {pts.length === 0 ? <p className="hint">Aucune vente notée sur cette période.</p> : (
+        <div className="chart live" onMouseLeave={() => setHover(null)}>
+          <svg viewBox={`0 0 ${W} ${H}`} role="img" aria-label="Ventes sur la période" key={md + per}>
+            {grid.map(g => <g key={g}><line x1={L} x2={W - R} y1={y(g)} y2={y(g)} stroke="var(--line)" /><text x={L - 6} y={y(g) + 4} textAnchor="end">{g >= 1000 ? g / 1000 + 'k' : g}</text></g>)}
+            {pts.map((p, i) => {
+              const x = L + i * bw + bw * 0.16, w = Math.max(2, bw * 0.68), on = hover === i;
+              return (
+                <g key={p.k} onMouseEnter={() => setHover(i)} onClick={() => setHover(hover === i ? null : i)} style={{ cursor: 'pointer' }}>
+                  <rect x={L + i * bw} y={T} width={bw} height={H - T - B} fill="transparent" />
+                  <rect className="barre" style={{ animationDelay: Math.min(i * 18, 500) + 'ms' }} x={x} y={y(p.t)} width={w} height={Math.max(0, H - B - y(p.t))} rx="2"
+                    fill={on ? 'var(--blue-dark)' : i === best ? '#3b74e8' : 'var(--blue)'} opacity={hover == null || on ? 1 : 0.45} />
+                  {(i % every === 0 || i === pts.length - 1) && <text x={x + w / 2} y={H - 6} textAnchor="middle">{court(p.k)}</text>}
+                </g>
+              );
+            })}
+            <line x1={L} x2={W - R} y1={y(avg)} y2={y(avg)} stroke="var(--warn)" strokeDasharray="5 4" strokeWidth="1.5" pointerEvents="none" />
+          </svg>
+          {h && (
+            <div className="tip" style={{ left: `${((L + hover * bw + bw / 2) / W) * 100}%`, top: `${(y(h.t) / H) * 100}%` }}>
+              <b className="num">{fmt(h.t)}</b><span>{label(h.k)}</span>
+              {avg > 0 && <span className={h.t >= avg ? 'pos' : 'neg'}>{h.t >= avg ? '+' : '−'}{Math.abs(Math.round((h.t - avg) / avg * 100))} % vs moyenne</span>}
+            </div>
+          )}
+        </div>
+      )}
+      {pts.length > 0 && <div className="legend">
+        <span><i className="sw" style={{ background: 'var(--blue)' }} /> Ventes</span>
+        <span><i className="sw dash" /> Moyenne : <b className="num">{fmt(avg)}</b></span>
+        <span>Meilleur : <b>{label(pts[best].k)}</b> ({fmt(pts[best].t)})</span>
+      </div>}
+    </div>
+  );
+}
+const MOIS_COURTS = ['janv.', 'févr.', 'mars', 'avr.', 'mai', 'juin', 'juil.', 'août', 'sept.', 'oct.', 'nov.', 'déc.'];
+
+const COULEURS = ['#0c2557', '#1f5ad6', '#4c86f0', '#7fa8f5', '#a9c5f8', '#5b6b85', '#93a3bd', '#c9d4e5'];
+function Donut({ depenses, total }) {
+  const [hi, setHi] = useState(null);
+  const parts = CATEGORIES.map(cat => ({ cat, t: sum(depenses.filter(d => (d.categorie || 'Autre') === cat), 'montant') })).filter(x => x.t > 0).sort((a, b) => b.t - a.t);
+  const r = 52, C = 2 * Math.PI * r;
+  let acc = 0;
+  const sel = hi != null ? parts[hi] : null;
+  return (
+    <div className="card">
+      <div className="card-head"><h2>Où part l'argent</h2><a className="hint" href="#depenses">Détail</a></div>
+      {parts.length === 0 ? <p className="hint">Aucune dépense datée sur cette période.</p> : (
+        <div className="donutwrap">
+          <svg viewBox="0 0 140 140" className="donut" role="img" aria-label="Dépenses par catégorie">
+            <circle cx="70" cy="70" r={r} fill="none" stroke="var(--bg)" strokeWidth="20" />
+            {parts.map((p, i) => {
+              const len = p.t / total * C, off = acc; acc += len;
+              return <circle key={p.cat} cx="70" cy="70" r={r} fill="none" stroke={COULEURS[i % COULEURS.length]} strokeWidth={hi === i ? 24 : 20}
+                strokeDasharray={`${Math.max(0, len - 1.2)} ${C}`} strokeDashoffset={-off} transform="rotate(-90 70 70)"
+                opacity={hi == null || hi === i ? 1 : 0.35} onMouseEnter={() => setHi(i)} onMouseLeave={() => setHi(null)} onClick={() => setHi(hi === i ? null : i)} style={{ cursor: 'pointer', transition: 'stroke-width .15s, opacity .15s' }} />;
+            })}
+            <text x="70" y="66" textAnchor="middle" className="dl">{sel ? Math.round(sel.t / total * 100) + ' %' : 'Total'}</text>
+            <text x="70" y="84" textAnchor="middle" className="dv">{fmt(sel ? sel.t : total).replace(' F', '')}</text>
+          </svg>
+          <ul className="dlegend">
+            {parts.map((p, i) => (
+              <li key={p.cat} className={hi === i ? 'on' : ''} onMouseEnter={() => setHi(i)} onMouseLeave={() => setHi(null)}>
+                <i className="sw" style={{ background: COULEURS[i % COULEURS.length] }} /><span>{p.cat}</span><b className="num">{fmt(p.t)}</b>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function Activite({ S }) {
+  const items = [
+    ...S.ventes.map(v => ({ id: 'v' + v.id, date: v.date, ts: v.created_at, txt: 'Vente', mt: n(v.montant), sens: 1, ic: 'cart', href: '#ventes' })),
+    ...S.depenses.filter(d => d.date).map(d => ({ id: 'd' + d.id, date: d.date, ts: d.created_at, txt: d.description, sub: d.categorie, mt: n(d.montant), sens: -1, ic: 'out', href: '#depenses' })),
+    ...S.revendeurs.filter(r => r.date).map(r => ({ id: 'r' + r.id, date: r.date, ts: r.created_at, txt: (n(r.rembourse) && !n(r.dette) ? 'Remboursement · ' : 'Dette · ') + r.nom, mt: n(r.rembourse) || n(r.dette), sens: n(r.rembourse) && !n(r.dette) ? 1 : 0, ic: 'users', href: '#revendeurs' })),
+    ...S.prets.filter(p => p.date).map(p => ({ id: 'p' + p.id, date: p.date, ts: p.created_at, txt: (n(p.rembourse) && !n(p.pret) ? 'Remboursement · ' : 'Prêt · ') + p.personne, mt: n(p.rembourse) || n(p.pret), sens: n(p.rembourse) && !n(p.pret) ? 1 : p.type === 'MATERIEL' ? 0 : -1, ic: 'hand', href: '#prets' })),
+  ].sort((a, b) => b.date.localeCompare(a.date) || (b.ts || '').localeCompare(a.ts || '')).slice(0, 7);
+  return (
+    <div className="card">
+      <div className="card-head"><h2>Activité récente</h2></div>
+      <div className="feed">
+        {items.length === 0 && <p className="hint">Rien pour le moment.</p>}
+        {items.map((x, i) => (
+          <a key={x.id} className="fitem" href={x.href} style={{ animationDelay: i * 50 + 'ms' }}>
+            <span className={'fic ' + (x.sens > 0 ? 'in' : x.sens < 0 ? 'out' : '')}><Ic name={x.ic} /></span>
+            <span className="ftxt"><b>{x.txt}</b><span className="muted">{dfr(x.date)}{x.sub ? ' · ' + x.sub : ''}</span></span>
+            <b className={'num ' + (x.sens > 0 ? 'pos' : x.sens < 0 ? 'neg' : '')}>{x.sens > 0 ? '+' : x.sens < 0 ? '−' : ''}{fmt(x.mt)}</b>
+          </a>
+        ))}
       </div>
     </div>
   );
