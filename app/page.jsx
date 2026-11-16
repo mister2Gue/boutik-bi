@@ -24,6 +24,8 @@ const P = {
   tag: 'M3 12V4a1 1 0 0 1 1-1h8l9 9-9 9zM7.5 7.5h.01',
   cal: 'M7 3v3M17 3v3M4 9h16M5 5h14a1 1 0 0 1 1 1v13a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1Z',
   store: 'M4 10v9a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-9M3 7l2-4h14l2 4M3 7h18v1a3 3 0 0 1-6 0 3 3 0 0 1-6 0 3 3 0 0 1-6 0zM9 20v-5h6v5',
+  note: 'M5 4h14a1 1 0 0 1 1 1v10l-5 5H5a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1Zm10 16v-4a1 1 0 0 1 1-1h4M8 9h8M8 13h5',
+  pin: 'M9 4h6l-1 6 4 4H6l4-4zM12 14v7',
   eye: 'M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12Zm10 3a3 3 0 1 0 0-6 3 3 0 0 0 0 6Z',
 };
 const Ic = ({ name }) => <svg className="ic" viewBox="0 0 24 24" aria-hidden="true"><path d={P[name]} /></svg>;
@@ -44,6 +46,7 @@ const VIEWS = [
   { id: 'depenses', lab: 'Dépenses', short: 'Dépenses', ic: 'out', sub: 'Tout ce qui sort de la caisse, rangé par catégorie' },
   { id: 'revendeurs', lab: 'Revendeurs', short: 'Revend.', ic: 'users', sub: 'Ce que les revendeurs vous doivent et ont rendu' },
   { id: 'prets', lab: 'Prêts', short: 'Prêts', ic: 'hand', sub: 'Argent prêté et matériel donné à crédit' },
+  { id: 'notes', lab: 'Notes', short: 'Notes', ic: 'note', sub: 'Vos détails, rappels et remarques sur la boutique' },
   { id: 'rapports', lab: 'Rapports PDF', short: 'Rapports', ic: 'file', sub: 'Choisissez la période et les parties, puis téléchargez le PDF' },
   { id: 'parametres', lab: 'Ma boutique', short: 'Boutique', ic: 'store', sub: 'Nom, slogan et logo de la boutique', admin: true },
   { id: 'acces', lab: 'Accès', short: 'Accès', ic: 'shield', sub: 'Qui peut voir ou modifier les données', admin: true },
@@ -139,7 +142,7 @@ function Auth({ boutique }) {
 function App({ session, admin, boutique, rechargerBoutique }) {
   const views = VIEWS.filter(v => !v.admin || admin);
   const [view, setView] = useState('accueil');
-  const [S, setS] = useState({ ventes: [], depenses: [], revendeurs: [], prets: [], caisse: null });
+  const [S, setS] = useState({ ventes: [], depenses: [], revendeurs: [], prets: [], notes: [], caisse: null });
   const [loaded, setLoaded] = useState(false);
   const [err, setErr] = useState('');
   const [maj, setMaj] = useState('');
@@ -149,7 +152,7 @@ function App({ session, admin, boutique, rechargerBoutique }) {
     read(); addEventListener('hashchange', read); return () => removeEventListener('hashchange', read);
   }, []);
 
-  const load = useCallback(async (tables = ['ventes', 'depenses', 'revendeurs', 'prets', 'caisse']) => {
+  const load = useCallback(async (tables = ['ventes', 'depenses', 'revendeurs', 'prets', 'notes', 'caisse']) => {
     const res = await Promise.all(tables.map(t => supabase.from(t).select('*')));
     if (res.some(r => r.error)) { setErr('Impossible de lire les données. Vérifiez la connexion et rechargez la page.'); return; }
     setErr('');
@@ -202,6 +205,7 @@ function App({ session, admin, boutique, rechargerBoutique }) {
           {loaded && V.id === 'depenses' && <Depenses {...ctx} />}
           {loaded && V.id === 'revendeurs' && <Revendeurs {...ctx} />}
           {loaded && V.id === 'prets' && <Prets {...ctx} />}
+          {loaded && V.id === 'notes' && <Notes {...ctx} />}
           {loaded && V.id === 'rapports' && <Rapports {...ctx} />}
           {loaded && V.id === 'parametres' && admin && <Parametres boutique={boutique} recharger={rechargerBoutique} />}
           {loaded && V.id === 'acces' && admin && <Acces {...ctx} />}
@@ -1042,6 +1046,81 @@ function Prets({ S, c, load, admin }) {
       </div>}
       <PersonTable groups={groups} table="prets" amountField="pret" withType load={load} admin={admin}
         labels={{ title: 'Comptes des prêts', who: 'Personne', total: 'Total prêté', entry: 'Prêt' }} />
+    </>
+  );
+}
+
+/* ---------- notes ---------- */
+function NoteForm({ init, onDone, onCancel }) {
+  const [titre, setTitre] = useState(init?.titre || '');
+  const [texte, setTexte] = useState(init?.texte || '');
+  const [date, setDate] = useState(init?.date || today());
+  const [msg, run] = useSave();
+  return (
+    <form style={{ display: 'grid', gap: 10 }} onSubmit={async e => {
+      e.preventDefault(); if (!texte.trim()) return;
+      const row = { titre: titre.trim() || null, texte: texte.trim(), date };
+      const ok = await run(() => init ? supabase.from('notes').update(row).eq('id', init.id) : supabase.from('notes').insert(row), init ? 'Note modifiée.' : 'Note enregistrée.');
+      if (ok) { if (!init) { setTitre(''); setTexte(''); setDate(today()); } onDone(); }
+    }}>
+      <div className="row" style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+        <div className="field wide"><label>Titre (facultatif)</label><input placeholder="ex : Commande fournisseur" value={titre} onChange={e => setTitre(e.target.value)} maxLength={120} /></div>
+        <div className="field"><label>Date</label><input type="date" required value={date} onChange={e => setDate(e.target.value)} /></div>
+      </div>
+      <div className="field full"><label>Note</label>
+        <textarea required rows={init ? 6 : 4} maxLength={5000} placeholder="Écrivez ici tous les détails…" value={texte} onChange={e => setTexte(e.target.value)}
+          style={{ width: '100%', padding: '10px 12px', border: '1px solid var(--line)', borderRadius: 8, background: '#fff', font: 'inherit', resize: 'vertical', lineHeight: 1.5 }} /></div>
+      <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end', alignItems: 'center', flexWrap: 'wrap' }}>
+        <p className={'msg ' + msg.c} style={{ marginRight: 'auto' }}>{msg.t}</p>
+        {onCancel && <button type="button" className="lnk" style={{ padding: '9px 14px' }} onClick={onCancel}>Annuler</button>}
+        <button className="btn">{init ? 'Enregistrer' : '+ Ajouter la note'}</button>
+      </div>
+    </form>
+  );
+}
+
+function Notes({ S, load, admin }) {
+  const [q, setQ] = useState('');
+  const [edit, setEdit] = useState(null);
+  const liste = useMemo(() => {
+    const k = q.trim().toLowerCase();
+    return [...(S.notes || [])]
+      .filter(n => !k || `${n.titre || ''} ${n.texte}`.toLowerCase().includes(k))
+      .sort((a, b) => (b.epingle - a.epingle) || String(b.date).localeCompare(String(a.date)) || String(b.created_at).localeCompare(String(a.created_at)));
+  }, [S.notes, q]);
+  const epingler = async n => { const { error } = await supabase.from('notes').update({ epingle: !n.epingle }).eq('id', n.id); if (!error) load(['notes']); };
+
+  return (
+    <>
+      {admin && <div className="card">
+        <div className="card-head"><h2>Nouvelle note</h2><span className="hint">Rappels, commandes, détails d'un client…</span></div>
+        <NoteForm onDone={() => load(['notes'])} />
+      </div>}
+      <div className="card">
+        <div className="card-head">
+          <h2>Mes notes <span className="muted" style={{ fontWeight: 500, fontSize: 14 }}>({(S.notes || []).length})</span></h2>
+          <input type="search" placeholder="Rechercher dans les notes…" value={q} onChange={e => setQ(e.target.value)} style={{ maxWidth: 280 }} />
+        </div>
+        {liste.length === 0 && <p className="hint">{q ? 'Aucune note ne correspond à la recherche.' : 'Aucune note pour le moment.'}</p>}
+        <div style={{ display: 'grid', gap: 12, gridTemplateColumns: 'repeat(auto-fill, minmax(min(300px, 100%), 1fr))', alignItems: 'start' }}>
+          {liste.map(n => (
+            <article key={n.id} style={{ border: '1px solid ' + (n.epingle ? '#c9d7f2' : 'var(--line)'), background: n.epingle ? 'var(--blue-soft)' : '#fff', borderRadius: 10, padding: 14, display: 'grid', gap: 8 }}>
+              {edit === n.id ? <NoteForm init={n} onDone={() => { setEdit(null); load(['notes']); }} onCancel={() => setEdit(null)} /> : <>
+                <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, alignItems: 'baseline' }}>
+                  <b style={{ fontSize: 15, minWidth: 0, overflowWrap: 'anywhere' }}>{n.epingle && '📌 '}{n.titre || 'Note'}</b>
+                  <span className="muted" style={{ fontSize: 12.5, whiteSpace: 'nowrap' }}>{dfr(n.date)}</span>
+                </div>
+                <p style={{ margin: 0, whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', fontSize: 14.5, lineHeight: 1.5 }}>{n.texte}</p>
+                {admin && <div className="actions">
+                  <button className="lnk" onClick={() => epingler(n)}>{n.epingle ? 'Désépingler' : 'Épingler'}</button>
+                  <button className="lnk" onClick={() => setEdit(n.id)}>Modifier</button>
+                  <DelBtn table="notes" id={n.id} load={load} />
+                </div>}
+              </>}
+            </article>
+          ))}
+        </div>
+      </div>
     </>
   );
 }
