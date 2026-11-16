@@ -335,7 +335,7 @@ function Accueil({ S, c, load, admin, maj }) {
 
       {(retard > 1 || (m != null && m > 0)) && (
         <div className="alerts">
-          {retard > 1 && <a className="alert warn" href="#ventes"><Ic name="clock" /><span><b>Aucune vente notée depuis le {dfr(derniere)}</b> ({retard} jours).{admin && ' Touchez ici pour noter les ventes.'}</span></a>}
+          {retard > 1 && <a className="alert warn" href="#journee"><Ic name="clock" /><span><b>Aucune vente notée depuis le {dfr(derniere)}</b> ({retard} jours).{admin && ' Touchez ici pour noter les ventes.'}</span></a>}
           {m != null && m > 0 && <div className="alert bad"><Ic name="wallet" /><span><b>Il manque {fmt(m)}</b> dans la caisse par rapport au solde.</span></div>}
         </div>
       )}
@@ -986,7 +986,7 @@ function Rapports({ S }) {
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState({ t: '', c: '' });
   const p = periode(preset, du, au);
-  const nbV = p.tout ? S.ventes.length : S.ventes.filter(v => v.date >= p.du && v.date <= p.au).length;
+  const nbV = p.tout ? new Set(S.ventes.map(v => v.date)).size : new Set(S.ventes.filter(v => v.date >= p.du && v.date <= p.au).map(v => v.date)).size;
   const aucun = !['resume', 'ventes', 'depenses', 'revendeurs', 'prets'].some(k => parts[k]);
 
   return (
@@ -1006,7 +1006,7 @@ function Rapports({ S }) {
           <div className="field"><label htmlFor="r-du">Du</label><input id="r-du" type="date" value={du} max={au} onChange={e => setDu(e.target.value)} /></div>
           <div className="field"><label htmlFor="r-au">Au</label><input id="r-au" type="date" value={au} min={du} onChange={e => setAu(e.target.value)} /></div>
         </div>}
-        <p className="formula">{p.tout ? `Tout depuis le début : ${S.ventes.length} jours de vente, ${S.depenses.length} dépenses.` : `Du ${dfr(p.du)} au ${dfr(p.au)} : ${nbV} jour(s) de vente noté(s).`} Les revendeurs et les prêts sont toujours montrés tels qu'ils sont aujourd'hui.</p>
+        <p className="formula">{p.tout ? `Tout depuis le début : ${nbV} jours de vente, ${S.depenses.length} dépenses.` : `Du ${dfr(p.du)} au ${dfr(p.au)} : ${nbV} jour(s) de vente noté(s).`} Les revendeurs et les prêts sont toujours montrés tels qu'ils sont aujourd'hui.</p>
       </div>
       <div className="card">
         <h2>2. Ce qu'il faut mettre dans le PDF</h2>
