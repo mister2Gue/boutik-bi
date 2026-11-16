@@ -254,3 +254,18 @@ a.kpi.link:hover { transform: translateY(-2px); box-shadow: 0 6px 18px rgba(12, 
 .fitem > b { font-size: 13.5px; }
 @keyframes fadein { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
 @media (prefers-reduced-motion: reduce) { .chart .barre, .fitem, .rank a.item, .livedot { animation: none; } }
+
+/* ---------- ma journée ---------- */
+.daynav { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 10px 12px; }
+.daynav .dayname { font-size: 16px; flex: 1; min-width: 160px; text-align: center; }
+.daynav input[type=date] { width: auto; padding: 6px 10px; }
+.daynav .lnk:disabled { opacity: .4; cursor: default; }
+.card.bilan { grid-template-columns: 1fr; gap: 6px; border-width: 2px; }
+.card.bilan.pos { border-color: #bfe3cd; } .card.bilan.neg { border-color: #f3cdc8; }
+.bilanrow { display: flex; justify-content: space-between; font-size: 15px; }
+.bilanrow.total { border-top: 1px solid var(--line); padding-top: 8px; font-size: 18px; font-weight: 700; }
+.card.bilan.pos .bilanrow.total b { color: var(--good); } .card.bilan.neg .bilanrow.total b { color: var(--bad); }
+@media (max-width: 900px) {
+  .bottomnav { display: flex !important; overflow-x: auto; gap: 2px; scrollbar-width: none; }
+  .bottomnav a { flex: 1 0 56px; }
+}
